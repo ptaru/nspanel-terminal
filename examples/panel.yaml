@@ -54,12 +54,10 @@ wifi:
 captive_portal:
 
 external_components:
-  - source: github://ptaru/nspanel-terminal@v0.1.0
+  - source:
+      type: local
+      path: ../components
     components: [nspanel_terminal]
-# For local development against a checkout, replace the source with:
-#   source:
-#     type: local
-#     path: ../components
 
 # Keep the display powered during TFT updates.
 switch:
