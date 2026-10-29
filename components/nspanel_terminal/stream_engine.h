@@ -208,38 +208,42 @@ class StreamEngine {
 // Dirty rows are claimed/cleared at snapshot time, never at DONE. Subsequent
 // rendering therefore remains dirty even when an older snapshot completes.
 struct DirtyRows {
-  struct Row {
-    uint16_t first = 454, last = 0;
-  };
-  std::array<Row, 320> rows{};
+  // 57 columns cover 454 pixels. Separate runs on one row remain separate.
+  static constexpr unsigned TILE = 8;
+  static constexpr unsigned COLUMNS = 57;
+  static constexpr uint64_t FULL = (uint64_t(1) << COLUMNS) - 1;
+  std::array<uint64_t, 320> rows{};
   unsigned next = 0;
   void mark(unsigned x, unsigned y, unsigned w = 1) {
-    rows[y].first = std::min<unsigned>(rows[y].first, x);
-    rows[y].last = std::max<unsigned>(rows[y].last, x + w);
+    if (!w || x >= 454 || y >= 320) return;
+    const unsigned first = x / TILE;
+    const unsigned last = (std::min<unsigned>(454, x + w) - 1) / TILE;
+    rows[y] |= (FULL >> (COLUMNS - (last - first + 1))) << first;
   }
   void all() {
     next = 0;
-    for (auto &r : rows) {
-      r.first = 0;
-      r.last = 454;
-    }
+    rows.fill(FULL);
   }
   bool take(unsigned &x, unsigned &y, unsigned &w, unsigned &h) {
     unsigned scanned = 0;
-    while (scanned < 320 && rows[(next + scanned) % 320].last == 0) ++scanned;
+    while (scanned < 320 && rows[(next + scanned) % 320] == 0) ++scanned;
     if (scanned == 320) return false;
     y = (next + scanned) % 320;
-    x = rows[y].first;
-    unsigned right = rows[y].last;
+    const unsigned first = __builtin_ctzll(rows[y]);
+    unsigned last = first;
+    while (last + 1 < COLUMNS && (rows[y] & (uint64_t(1) << (last + 1)))) ++last;
+    const uint64_t mask = (FULL >> (COLUMNS - (last - first + 1))) << first;
+    x = first * TILE;
+    const unsigned right = std::min<unsigned>(454, (last + 1) * TILE);
+    w = right - x;
     h = 1;
-    while (h < 16 && y + h < 320 && rows[y + h].last) {
-      x = std::min<unsigned>(x, rows[y + h].first);
-      right = std::max<unsigned>(right, rows[y + h].last);
+    rows[y] &= ~mask;
+    // Consume only matching columns. Other runs in those rows stay queued.
+    while (h < 16 && y + h < 320 && (rows[y + h] & mask)) {
+      rows[y + h] &= ~mask;
       ++h;
     }
-    w = right - x;
-    for (unsigned i = 0; i < h; i++) rows[y + i] = Row{};
-    next = (y + h) % 320;
+    next = (y + (rows[y] ? 0 : h)) % 320;
     return true;
   }
 };

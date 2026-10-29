@@ -54,6 +54,8 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void trace_edge(bool down, uint16_t x, uint16_t y);
   void clear_trace() { trace_head_ = trace_count_ = 0; }
   void log_timings();
+  void start_render_measurement();
+  void report_render_measurement();
 
  protected:
   int get_width_internal() override { return 454; }
@@ -132,6 +134,9 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   };
   std::array<TraceEvent, 96> trace_buf_{};
   unsigned trace_head_ = 0, trace_count_ = 0;
+  uint32_t measurement_bytes_ = 0, measurement_started_ms_ = 0;
+  unsigned measurement_rectangles_ = 0, measurement_faults_ = 0, measurement_resyncs_ = 0;
+  bool measurement_active_ = false;
   void trace_(uint8_t type, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0, uint16_t d = 0);
 };
 }  // namespace esphome::nspanel_terminal

@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-10-29
 
-- Ship the hardware-tested blank V92 TFT with live brightness support.
-- Add terminal TFT upload and brightness actions; consolidate installation and recovery guidance.
-- Use the local component checkout in the example until a new release is published.
+- Ship the hardware-tested blank V92 TFT with live brightness and a fixed 3-second host-inactivity watchdog.
+- Add terminal TFT upload and brightness actions.
+- Reduce streamed pixels by tracking changed 8-pixel tiles and keeping distant changes in separate rectangles.
+- Add render measurement counters and timing trace hooks.
+- Consolidate installation and recovery guidance.
 
 ## 0.1.0 — 2026-10-29
 

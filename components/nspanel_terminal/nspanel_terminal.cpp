@@ -47,6 +47,33 @@ void NSPanelDisplay::log_timings() {
     ESP_LOGI(TAG, "T %u %u %u %u %u %u", unsigned(e.type), unsigned(e.t), e.a, e.b, e.c, e.d);
   }
 }
+void NSPanelDisplay::start_render_measurement() {
+  measurement_bytes_ = bytes_sent();
+  measurement_rectangles_ = completed_rectangles();
+  measurement_faults_ = faults_;
+  measurement_resyncs_ = resyncs_;
+  measurement_started_ms_ = millis();
+  clear_trace();
+  diagnostics_ = true;
+  measurement_active_ = true;
+  ESP_LOGI(TAG, "Render measurement started");
+}
+void NSPanelDisplay::report_render_measurement() {
+  if (!measurement_active_) {
+    ESP_LOGW(TAG, "Render measurement has not started");
+    return;
+  }
+  diagnostics_ = false;
+  ESP_LOGI(TAG, "Render measurement: %u ms, %u UART bytes, %u rectangles, %u faults, %u resyncs, %u trace events%s",
+           unsigned(millis() - measurement_started_ms_), unsigned(bytes_sent() - measurement_bytes_),
+           unsigned(uint16_t(completed_rectangles() - measurement_rectangles_)),
+           faults_ - measurement_faults_, resyncs_ - measurement_resyncs_, trace_count_,
+           trace_count_ == trace_buf_.size() ? " (buffer may have wrapped)" : "");
+  diagnostics_ = true;
+  log_timings();
+  diagnostics_ = false;
+  measurement_active_ = false;
+}
 void NSPanelDisplay::draw_absolute_pixel_internal(int x, int y, Color color) {
   if (this->buffer_ == nullptr || x < 0 || y < 0 || x >= protocol::WIDTH || y >= protocol::HEIGHT) return;
   const uint16_t rgb565 = (uint16_t(color.r & 0xf8) << 8) | (uint16_t(color.g & 0xfc) << 3) | (color.b >> 3);
@@ -79,8 +106,15 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
     const uint8_t *source = ptr + size_t(y_offset + row) * source_stride + 2u * x_offset;
     uint8_t *target = this->buffer_ + 2u * (size_t(y_start + row) * protocol::WIDTH + x_start);
     if (std::memcmp(source, target, size_t(w) * 2u) == 0) continue;
+    // Compare on the same 8-pixel grid as DirtyRows. A wide LVGL flush can
+    // contain several independent changes, with unchanged tiles between them.
+    for (int col = x_start / 8; col <= (x_start + w - 1) / 8; ++col) {
+      const int first = std::max(x_start, col * 8) - x_start;
+      const int last = std::min(x_start + w, (col + 1) * 8) - x_start;
+      if (std::memcmp(source + 2 * first, target + 2 * first, size_t(last - first) * 2u) != 0)
+        this->dirty_.mark(x_start + first, y_start + row, last - first);
+    }
     std::memcpy(target, source, size_t(w) * 2u);
-    this->dirty_.mark(x_start, y_start + row, w);
     ++changed;
   }
   if (changed) trace_(3, uint16_t(w), uint16_t(h), uint16_t(x_start), uint16_t(y_start));
