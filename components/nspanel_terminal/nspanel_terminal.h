@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <vector>
+#include <string>
 
 #include "esphome/components/display/display_buffer.h"
 #include "esphome/components/uart/uart.h"
@@ -25,6 +26,14 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     stream_.request_exit();
   }
   void request_enter();
+  void request_tft_upload();
+  void request_brightness(int percent);
+  void set_initial_brightness(uint8_t percent) {
+    initial_brightness_ = percent;
+    brightness_percent_ = percent;
+    brightness_selected_ = true;
+  }
+  void set_tft_url(const std::string &url) { tft_url_ = url; }
   // Trial-only: stop all stream records without EXIT so the display watchdog runs.
   void request_abandon();
   void set_touchscreen(NSPanelTouchscreen *t) { touchscreen_ = t; }
@@ -72,6 +81,8 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     VERIFY_BKCMD,
     VERIFY_PAGE,
     VERIFY_IDENTITY,
+    BRIGHTNESS_SETTLE,
+    BRIGHTNESS_VERIFY,
     STOPPED
   };
   void send_command_(const char *);
@@ -84,6 +95,8 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void fail_(const char *);
   void finish_recovery_();
   void service_stream_();
+  bool upload_tft_();
+  bool upload_ack_(uint32_t &position, uint32_t expected);
   State state_ = State::BOOT_WAIT;
   uint32_t deadline_ = 0, next_command_byte_ = 0;
   uint8_t config_step_ = 0, recovery_step_ = 0, page_ = 0, saved_bkcmd_ = 3;
@@ -105,6 +118,12 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   unsigned resyncs_ = 0, faults_ = 0;
   uint32_t submit_ms_ = 0, last_loop_us_ = 0, max_gap_us_ = 0, abandon_deadline_ = 0;
   bool abandon_requested_ = false;
+  bool upload_pending_ = false;
+  int16_t initial_brightness_ = -1;
+  uint8_t brightness_percent_ = 100;
+  bool brightness_selected_ = false;
+  bool brightness_pending_ = false, brightness_resume_ = false;
+  std::string tft_url_;
   unsigned loops_ = 0;
   struct TraceEvent {
     uint32_t t;

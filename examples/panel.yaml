@@ -30,6 +30,14 @@ api:
     - action: enter_terminal
       then:
         - lambda: 'id(panel).request_enter();'
+    - action: upload_tft
+      then:
+        - lambda: 'id(panel).request_tft_upload();'
+    - action: set_brightness
+      variables:
+        percent: int
+      then:
+        - lambda: 'id(panel).request_brightness(percent);'
 
 ota:
   - platform: esphome
@@ -53,8 +61,7 @@ external_components:
 #     type: local
 #     path: ../components
 
-# Keep the display powered. Do not combine this image with the `nextion`
-# component; use examples/installer.yaml for TFT updates.
+# Keep the display powered during TFT updates.
 switch:
   - platform: gpio
     id: screen_power
@@ -77,6 +84,8 @@ display:
     uart_id: tf_uart
     update_interval: never
     auto_clear_enabled: false
+    tft_url: !secret tft_url
+    brightness: 100
 
 touchscreen:
   - platform: nspanel_terminal

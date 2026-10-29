@@ -9,6 +9,10 @@ Target hardware: the **EU version** of the Sonoff NSPanel. The US version is
 oriented differently; this image is not for
 it.
 
+This verified public blank V92 TFT is the base for future display changes.
+Historical kitchen TFT build scripts retain their original inputs so earlier
+trial hashes remain reproducible.
+
 ## Provenance
 
 - The UI was exported with **Nextion Editor 1.65.1** for the EU NSPanel
@@ -40,8 +44,10 @@ The shipped image has passed:
   `NX4832F035_011C,92,61744` and a rectangle transfer;
 - the whole-file finalization helper.
 
-It has **not** been flashed by this repository. It is a release candidate; test
-it on a spare panel before relying on it.
+It was uploaded once to the project EU NSPanel on 29 October 2026. The terminal
+reported full transfer, and a subsequent exit verified native92, baud and
+restored registers/page. The user confirmed the blank page appears and terminal
+re-entry works; broader panel compatibility is untested.
 
 ## Verify
 

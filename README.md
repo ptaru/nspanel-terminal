@@ -38,6 +38,8 @@ external_components:
 
 `v0.1.0` matches the included V92 TFT. The component and display firmware are a
 matched pair; bump the tag and ship a matching TFT when the protocol changes.
+The new terminal uploader and brightness action currently require this checkout
+as a local external component until a new tag is published.
 ESPHome clones the repository and looks for `components/nspanel_terminal/`; the
 clone is cached for a day, so use `refresh: always` while iterating.
 
@@ -49,7 +51,9 @@ clone is cached for a day, so use `refresh: always` while iterating.
   outer CRCs, bootloader/installer emulation to application entry, the V92
   helper stream session, and the whole-file finalization helper.
 - Visible area is 454×320 inside the 480×320 controller.
-- Brightness control not yet supported.
+- Brightness can be set at boot or changed through the component API. The
+  included TFT uses a brief exit/re-entry; a separate blank-base candidate
+  supports live changes and was tested on one EU NSPanel.
 
 ## Requirements
 

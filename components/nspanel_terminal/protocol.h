@@ -6,8 +6,8 @@
 #include <vector>
 
 namespace esphome::nspanel_terminal::protocol {
-enum { RECT = 1, DATA, END, PING, EXIT, SYNC };
-enum { READY = 128, BYE, PROGRESS, ERROR, SYNCED, DONE };
+enum { RECT = 1, DATA, END, PING, EXIT, SYNC, BRIGHTNESS };
+enum { READY = 128, BYE, PROGRESS, ERROR, SYNCED, DONE, READY_BRIGHTNESS, BRIGHTNESS_DONE };
 constexpr unsigned WINDOW = 512, PAYLOAD = 512;
 inline unsigned get16(const uint8_t *p) { return unsigned(p[0]) | (unsigned(p[1]) << 8); }
 inline uint32_t get32(const uint8_t *p) { return get16(p) | (uint32_t(get16(p + 2)) << 16); }
@@ -228,6 +228,6 @@ inline bool reply(const uint8_t *p, unsigned session, Reply &r) {
   r.x = get16(p + 22);
   r.y = get16(p + 24);
   r.highwater = get16(p + 28);
-  return r.status >= READY && r.status <= DONE && r.highwater <= WINDOW;
+  return r.status >= READY && r.status <= BRIGHTNESS_DONE && r.highwater <= WINDOW;
 }
 }  // namespace esphome::nspanel_terminal::protocol

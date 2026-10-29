@@ -7,7 +7,7 @@ namespace esphome::nspanel_terminal {
 // Platform-independent transport. No waits, UART calls or borrowed LVGL buffers.
 class StreamEngine {
  public:
-  enum class Stage { READY, IDLE, RECT, DATA, END, DONE, SYNC, SYNCED, EXIT, BYE, STOPPED, FAILED };
+  enum class Stage { READY, IDLE, RECT, DATA, END, DONE, SYNC, SYNCED, BRIGHTNESS_ACK, EXIT, BYE, STOPPED, FAILED };
   struct Pixels {
     const uint8_t *data;
     uint16_t operator()(unsigned i) const { return protocol::get16(data + 2 * i); }
@@ -47,6 +47,10 @@ class StreamEngine {
           stage_ = Stage::EXIT;
           last_report_ = now;
           prepare(now);
+        } else if (brightness_pending_) {
+          tx_ = protocol::record(session_, seq_++, protocol::BRIGHTNESS, brightness_percent_);
+          brightness_pending_ = false;
+          stage_ = Stage::BRIGHTNESS_ACK;
         } else if (uint32_t(now - last_wire_) >= 80) {
           tx_ = protocol::record(session_, seq_++, protocol::PING);
           ++heartbeats_;
@@ -117,12 +121,13 @@ class StreamEngine {
       fail("receiver or touch fault");
       return true;
     }
-    if (r.status == protocol::READY) {
+    if (r.status == protocol::READY || r.status == protocol::READY_BRIGHTNESS) {
       if (stage_ != Stage::READY || r.seq || r.consumed || r.rectangles) {
         fail("unexpected READY");
         return true;
       }
       stage_ = Stage::IDLE;
+      live_brightness_ = r.status == protocol::READY_BRIGHTNESS;
     } else if (r.status == protocol::ERROR) {
       if (++retries_ > 2) {
         fail("receiver CRC fault");
@@ -148,6 +153,12 @@ class StreamEngine {
       snapshot_ = nullptr;
       encoder_.reset();
       stage_ = Stage::IDLE;
+    } else if (r.status == protocol::BRIGHTNESS_DONE) {
+      if (stage_ != Stage::BRIGHTNESS_ACK || pending()) {
+        fail("unexpected brightness ACK");
+        return true;
+      }
+      stage_ = Stage::IDLE;
     } else if (r.status == protocol::BYE) {
       if (stage_ != Stage::BYE || pending()) {
         fail("unexpected BYE");
@@ -158,6 +169,11 @@ class StreamEngine {
     return true;
   }
   void request_exit() { exit_ = true; }
+  void request_brightness(uint8_t percent) {
+    brightness_percent_ = percent;
+    brightness_pending_ = true;
+  }
+  bool live_brightness() const { return live_brightness_; }
   void fail(const char *reason) {
     error_ = reason;
     stage_ = Stage::FAILED;
@@ -178,6 +194,8 @@ class StreamEngine {
   uint16_t completed_ = 0;
   uint32_t sent_ = 0, consumed_ = 0, last_wire_ = 0, last_report_ = 0;
   bool exit_ = false;
+  bool live_brightness_ = false, brightness_pending_ = false;
+  uint8_t brightness_percent_ = 100;
   const uint8_t *snapshot_ = nullptr;
   std::optional<protocol::Encoder<Pixels>> encoder_;
   std::vector<uint8_t> tx_, body_, raw_;

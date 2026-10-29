@@ -7,7 +7,9 @@ This release is also not for NSPanel Pro or other displays.
 - ESPHome **2026.10.x**; tested with 2026.10.0 on the Arduino framework.
 - Visible area is 454×320 of the 480×320 controller.
 - Single-pointer touch only.
-- No display brightness control.
+- Brightness setting is available in the current checkout. The included TFT
+  briefly exits and re-enters for a runtime change; a separate candidate
+  supports live changes and was tested on one EU NSPanel.
 - No automatic ESP32 OTA rollback.
 - The rightmost 26 columns of the controller are not visible.
 

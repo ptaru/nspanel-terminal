@@ -1,6 +1,7 @@
 #include "nspanel_terminal.h"
 
 #include <driver/uart.h>
+#include <esp_http_client.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -8,6 +9,7 @@
 
 #include "esphome/components/uart/uart_component_esp_idf.h"
 #include "esphome/core/log.h"
+#include "esphome/core/application.h"
 #include "nspanel_touchscreen.h"
 namespace esphome::nspanel_terminal {
 static const char *const TAG = "nspanel_terminal";
@@ -156,6 +158,12 @@ void NSPanelDisplay::service_stream_() {
     protocol::Reply r;
     const unsigned completed = stream_.completed();
     if (!stream_.feed(bytes[i], millis(), r)) continue;
+    if (r.status == protocol::READY_BRIGHTNESS) {
+      ESP_LOGI(TAG, "Live brightness capability confirmed");
+      if (brightness_selected_) stream_.request_brightness(brightness_percent_);
+    }
+    if (r.status == protocol::BRIGHTNESS_DONE)
+      ESP_LOGI(TAG, "Live brightness ACK received");
     if (r.status == protocol::ERROR && !stream_.failed()) ++resyncs_;
     if (stream_.completed() != completed) trace_(5, uint16_t(millis() - submit_ms_));
     if (touchscreen_ && r.freshness == 1 && !touchscreen_->new_report(r.mask & 1, r.x, r.y)) {
@@ -250,6 +258,154 @@ void NSPanelDisplay::request_enter() {
   state_ = State::BOOT_WAIT;
   deadline_ = millis() + 300;
 }
+void NSPanelDisplay::request_tft_upload() {
+  if (tft_url_.empty() || upload_pending_) {
+    ESP_LOGE(TAG, "TFT upload unavailable or already pending");
+    return;
+  }
+  upload_pending_ = true;
+  startup_retry_ = false;
+  if (state_ != State::STOPPED) request_exit();
+}
+void NSPanelDisplay::request_brightness(int percent) {
+  if (percent < 0 || percent > 100) {
+    ESP_LOGE(TAG, "Brightness must be 0-100%%");
+    return;
+  }
+  brightness_percent_ = uint8_t(percent);
+  brightness_selected_ = true;
+  if (state_ == State::STREAM && stream_.live_brightness()) {
+    stream_.request_brightness(brightness_percent_);
+    return;
+  }
+  brightness_pending_ = true;
+  if (state_ == State::STOPPED || state_ == State::BRIGHTNESS_SETTLE || state_ == State::BRIGHTNESS_VERIFY) return;
+  brightness_resume_ = true;
+  if (state_ != State::BOOT_WAIT) {
+    startup_retry_ = false;
+    request_exit();
+  }
+}
+
+bool NSPanelDisplay::upload_ack_(uint32_t &position, uint32_t expected) {
+  uint8_t reply[5]{};
+  size_t count = 0;
+  const uint32_t start = millis();
+  while (millis() - start < 5000) {
+    uint8_t b;
+    if (available() && read_byte(&b)) {
+      if (!count && b != 0x05 && b != 0x08) continue;
+      reply[count++] = b;
+      if (reply[0] == 0x05 || count == 5) break;
+    } else {
+      App.feed_wdt();
+      delay(1);
+    }
+  }
+  if (!count) return false;
+  if (reply[0] == 0x05) {
+    position = expected;
+    return true;
+  }
+  if (count != 5) return false;
+  position = uint32_t(reply[1]) | uint32_t(reply[2]) << 8 | uint32_t(reply[3]) << 16 | uint32_t(reply[4]) << 24;
+  if (position == 0) position = expected;
+  return true;
+}
+
+bool NSPanelDisplay::upload_tft_() {
+  esp_http_client_config_t config{};
+  config.url = tft_url_.c_str();
+  config.timeout_ms = 5000;
+  auto http = esp_http_client_init(&config);
+  if (!http) return false;
+  esp_http_client_set_method(http, HTTP_METHOD_HEAD);
+  uint32_t size = 0;
+  if (esp_http_client_open(http, 0) == ESP_OK) {
+    esp_http_client_fetch_headers(http);
+    if (esp_http_client_get_status_code(http) == 200)
+      size = esp_http_client_get_content_length(http);
+  }
+  esp_http_client_close(http);
+  if (size < 4096 || size > 16777216) {
+    ESP_LOGE(TAG, "TFT server must provide Content-Length (size=%u)", unsigned(size));
+    esp_http_client_cleanup(http);
+    return false;
+  }
+  drain_();
+  auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+  const auto port = uart_port_t(idf->get_hw_serial_number());
+  auto command = [this, port](const char *s) {
+    write_str(s);
+    const uint8_t end[] = {255, 255, 255};
+    write_array(end, sizeof end);
+    uart_wait_tx_done(port, pdMS_TO_TICKS(1000));
+  };
+  command("sleep=0");
+  command("dim=100");
+  delay(250);
+  drain_();
+  char request[64];
+  std::snprintf(request, sizeof request, "whmi-wris %u,115200,1", unsigned(size));
+  command(request);
+  uint32_t position = 0;
+  if (!upload_ack_(position, 0) || position != 0) {
+    ESP_LOGE(TAG, "Display did not accept TFT upload");
+    esp_http_client_cleanup(http);
+    return false;
+  }
+  ESP_LOGI(TAG, "Uploading TFT: %u bytes", unsigned(size));
+  std::vector<uint8_t> buffer(4096);
+  unsigned retries = 0;
+  while (position < size) {
+    const uint32_t start = position;
+    const size_t count = std::min<size_t>(buffer.size(), size - start);
+    char range[64];
+    std::snprintf(range, sizeof range, "bytes=%u-%u", unsigned(start), unsigned(start + count - 1));
+    esp_http_client_set_method(http, HTTP_METHOD_GET);
+    esp_http_client_set_header(http, "Range", range);
+    if (esp_http_client_open(http, 0) != ESP_OK) {
+      esp_http_client_cleanup(http);
+      return false;
+    }
+    esp_http_client_fetch_headers(http);
+    const int code = esp_http_client_get_status_code(http);
+    if (code != 206 || esp_http_client_get_content_length(http) != int(count)) {
+      ESP_LOGE(TAG, "TFT range request failed at %u: HTTP %d", unsigned(start), code);
+      esp_http_client_cleanup(http);
+      return false;
+    }
+    size_t read = 0;
+    const uint32_t read_start = millis();
+    while (read < count && millis() - read_start < 5000) {
+      int n = esp_http_client_read(http, reinterpret_cast<char *>(buffer.data() + read), count - read);
+      if (n > 0) read += n;
+      App.feed_wdt();
+    }
+    esp_http_client_close(http);
+    if (read != count) {
+      esp_http_client_cleanup(http);
+      return false;
+    }
+    write_array(buffer.data(), count);
+    if (uart_wait_tx_done(port, pdMS_TO_TICKS(5000)) != ESP_OK ||
+        !upload_ack_(position, start + count) || position > size || position == start) {
+      esp_http_client_cleanup(http);
+      return false;
+    }
+    if (position < start + count && ++retries > 5) {
+      esp_http_client_cleanup(http);
+      return false;
+    }
+    if (position == start + count) retries = 0;
+    if ((position / 4096) % 32 == 0 || position == size)
+      ESP_LOGI(TAG, "TFT upload %u/%u", unsigned(position), unsigned(size));
+    App.feed_wdt();
+  }
+  ESP_LOGI(TAG, "TFT upload transfer complete");
+  esp_http_client_cleanup(http);
+  return true;
+}
 void NSPanelDisplay::loop() {
   const uint32_t loop_us = micros();
   if (last_loop_us_) {
@@ -264,7 +420,8 @@ void NSPanelDisplay::loop() {
   if (exit_requested_ && state_ != State::STREAM && state_ != State::SWITCHING && state_ != State::RECOVER_WAIT &&
       state_ != State::RECOVER_CONFIG && state_ != State::RECOVER_BAUD && state_ != State::VERIFY_SYS0 &&
       state_ != State::VERIFY_SYS1 && state_ != State::VERIFY_SYS2 && state_ != State::VERIFY_BKCMD &&
-      state_ != State::VERIFY_PAGE && state_ != State::VERIFY_IDENTITY && state_ != State::STOPPED) {
+      state_ != State::VERIFY_PAGE && state_ != State::VERIFY_IDENTITY && state_ != State::BRIGHTNESS_SETTLE &&
+      state_ != State::BRIGHTNESS_VERIFY && state_ != State::STOPPED) {
     if (state_ == State::CONFIG)
       fail_("entry cancelled");
     else
@@ -273,7 +430,18 @@ void NSPanelDisplay::loop() {
   }
   switch (state_) {
     case State::BOOT_WAIT:
-      if (overdue) send_query_(State::CONNECT, "connect");
+      if (overdue) {
+        if (initial_brightness_ >= 0 && !brightness_pending_) {
+          brightness_percent_ = initial_brightness_;
+          brightness_pending_ = true;
+          brightness_resume_ = true;
+        }
+        initial_brightness_ = -1;
+        if (brightness_pending_)
+          state_ = State::STOPPED;
+        else
+          send_query_(State::CONNECT, "connect");
+      }
       break;
     case State::CONNECT:
       if (read_terminated_()) {
@@ -498,7 +666,49 @@ void NSPanelDisplay::loop() {
         finish_recovery_();
       }
       break;
+    case State::BRIGHTNESS_SETTLE:
+      if (overdue) send_query_(State::BRIGHTNESS_VERIFY, "get dim");
+      break;
+    case State::BRIGHTNESS_VERIFY:
+      if (read_fixed_(8)) {
+        if (rx_[0] == 0x71 && rx_[5] == 255 && rx_[6] == 255 && rx_[7] == 255 &&
+            protocol::get32(rx_.data() + 1) == brightness_percent_)
+          ESP_LOGI(TAG, "Brightness verified at %u%%", brightness_percent_);
+        else
+          ESP_LOGE(TAG, "Brightness verification failed");
+        state_ = State::STOPPED;
+        if (!brightness_pending_ && brightness_resume_) {
+          brightness_resume_ = false;
+          request_enter();
+        }
+      } else if (overdue) {
+        ESP_LOGE(TAG, "Brightness verification timed out");
+        state_ = State::STOPPED;
+        if (!brightness_pending_ && brightness_resume_) {
+          brightness_resume_ = false;
+          request_enter();
+        }
+      }
+      break;
     case State::STOPPED:
+      if (upload_pending_) {
+        upload_pending_ = false;
+        const bool ok = upload_tft_();
+        ESP_LOGI(TAG, "TFT upload %s", ok ? "complete" : "failed");
+        brightness_pending_ = true;  // Upload wakes the display at 100%; restore the selected level.
+        brightness_resume_ = true;
+        state_ = State::BOOT_WAIT;
+        exit_requested_ = false;
+        deadline_ = millis() + (ok ? 3000 : 1000);
+      } else if (brightness_pending_) {
+        brightness_pending_ = false;
+        drain_();
+        char command[24];
+        std::snprintf(command, sizeof command, "dim=%u", brightness_percent_);
+        send_command_(command);
+        state_ = State::BRIGHTNESS_SETTLE;
+        deadline_ = millis() + 40;
+      }
       break;
   }
 }

@@ -3,12 +3,13 @@
 These examples are for the **EU version** of the Sonoff NSPanel. The US version
 is oriented differently.
 
-There are two separate ESP32 images:
+There are two example ESP32 images:
 
 1. **`installer.yaml`** — uses ESPHome's standard `nextion` component to
    download and flash the TFT once. It exposes `upload_tft`.
 2. **`panel.yaml`** — uses `nspanel_terminal` for the display and touchscreen.
-   It must not contain the `nextion` component.
+   It also exposes `upload_tft` for later TFT updates without changing ESP32
+   firmware. It must not contain the `nextion` component.
 
 Create a private `secrets.yaml` in this directory:
 
@@ -28,5 +29,6 @@ The tag matches the included V92 TFT. For local development against a checkout,
 replace the source with `type: local` and `path: ../components`. ESPHome caches
 the clone for a day; use `refresh: always` while iterating.
 
-The suggested flow is: flash installer → call `upload_tft` → flash panel. See
+For an initial installation, flash installer → call `upload_tft` → flash panel.
+For subsequent TFT updates, call `upload_tft` on the panel image. See
 [the install guide](../docs/INSTALL.md).

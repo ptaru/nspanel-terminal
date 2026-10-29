@@ -16,6 +16,8 @@ display:
     uart_id: tf_uart
     update_interval: never
     auto_clear_enabled: false
+    tft_url: !secret tft_url
+    brightness: 100
 
 touchscreen:
   - platform: nspanel_terminal
@@ -29,9 +31,25 @@ touchscreen:
       y_max: 319
 ```
 
-The component must own the display UART. Do **not** add ESPHome's `nextion`
-component to the same firmware; use the separate installer image for TFT
-updates.
+The component owns the display UART. Add an ESPHome API action calling
+`id(panel).request_tft_upload()` to update the TFT from `tft_url`. The URL must
+serve HTTP byte ranges. The component exits terminal mode before transfer and
+reconnects after upload. Do not add ESPHome's `nextion` component to the same
+UART.
+The first TFT installation still uses `installer.yaml`, since the terminal
+requires V92 to enter and exit its stream protocol.
+
+`brightness` optionally sets the backlight percentage at boot (0–100). For
+runtime changes, expose an API action with a `percent: int` variable that calls
+`id(panel).request_brightness(percent)`. The current V92 TFT uses the STM's
+normal `dim` command, which briefly exits and re-enters terminal mode. A new
+blank-base TFT candidate adds a live brightness record; the component detects
+its capability report and applies the change without leaving the stream. When
+the terminal is already stopped, it uses the normal command mode. The live
+extension was hardware-tested on one EU NSPanel on 29 October 2026; the
+included public TFT still uses the original capability response.
+Use the local component source while testing this change; the example's
+`v0.1.0` tag refers to the earlier published version.
 
 ## Requirements
 
@@ -49,7 +67,7 @@ snapshot.
 - CRC/SYNC redraw for the affected rectangle; fatal faults stop safely.
 - Touch press/release edges are queued; one pointer.
 - Entry saves page/registers/baud; exit verifies and restores them.
-- Idle heartbeats keep the display watchdog from returning to the stock UI
+- Idle heartbeats keep the display watchdog from returning to the blank UI
   while the host is alive.
 - `exit_terminal` returns to the Nextion UI. If the host stops sending data,
   the display watchdog returns to the stock/blank page after about 300 ms.
@@ -71,7 +89,7 @@ snapshot.
 - 454×320 visible geometry; the rightmost 26 columns of the 480×320 controller
   are not visible.
 - Single pointer; no multi-touch.
-- No brightness control.
-- The component does not update the TFT. Use the installer image and the
-  Nextion uploader.
+- The currently shipped TFT briefly exits and re-enters for a brightness
+  change. The live-brightness TFT is a separate paired candidate.
+- TFT upload currently supports HTTP URLs only.
 - Hardware-specific timings and the blank TFT need validation on more panels.
