@@ -20,6 +20,8 @@ static const char *const TAG = "nspanel_terminal";
 NSPanelDisplay::~NSPanelDisplay() {
   task_stop_ = true;
   while (task_running_) vTaskDelay(1);
+  RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
+  RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
   RAMAllocator<uint8_t>().deallocate(snapshot_, size_t(width_) * 16 * 2);
 }
 void NSPanelDisplay::setup() {
@@ -52,14 +54,21 @@ void NSPanelDisplay::task_entry_(void *arg) {
   vTaskDelete(nullptr);
 }
 void NSPanelDisplay::task_loop_() {
+  int incoming = -1;
   while (!task_stop_) {
     bool streaming;
     {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
       streaming = state_ == State::STREAM;
-      if (streaming && !abandon_requested_) service_stream_();
+      if (streaming && !abandon_requested_) service_stream_(incoming);
+      incoming = -1;
     }
-    vTaskDelay(pdMS_TO_TICKS(streaming ? 1 : 10));
+    if (streaming) {
+      auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+      uint8_t b;
+      if (uart_read_bytes(uart_port_t(idf->get_hw_serial_number()), &b, 1, pdMS_TO_TICKS(1)) == 1)
+        incoming = b;
+    } else vTaskDelay(pdMS_TO_TICKS(10));
   }
 }
 void NSPanelDisplay::dump_config() {
@@ -114,6 +123,97 @@ void NSPanelDisplay::report_render_measurement() {
   log_timings();
   diagnostics_ = false;
   measurement_active_ = false;
+}
+void NSPanelDisplay::start_protocol_benchmark() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (benchmark_active_ || state_ != State::STREAM || !stream_.idle() || !buffer_ || !snapshot_ || exit_requested_) {
+    ESP_LOGW(TAG, "Protocol benchmark requires an idle streaming terminal");
+    return;
+  }
+  RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::ALLOC_EXTERNAL);
+  allocator.deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
+  benchmark_cache_ = nullptr;
+  benchmark_cache_size_ = 0;
+  allocator.deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
+  benchmark_snapshot_ = allocator.allocate(size_t(width_) * height_ * 2);
+  if (!benchmark_snapshot_) {
+    ESP_LOGE(TAG, "Protocol benchmark PSRAM allocation failed");
+    return;
+  }
+  benchmark_active_ = true;
+  benchmark_legacy_ = false;
+  benchmark_reuse_ = false;
+  benchmark_preencoded_ = false;
+  benchmark_mode_ = benchmark_next_ = 0;
+  benchmark_started_ms_ = millis();
+  benchmark_bytes_ = bytes_sent();
+  benchmark_rectangles_ = completed_rectangles();
+  benchmark_faults_ = faults_;
+  benchmark_resyncs_ = resyncs_;
+  benchmark_build_us_ = benchmark_encode_us_ = 0;
+  benchmark_service_calls_ = benchmark_credit_stalls_ = benchmark_uart_stalls_ = 0;
+  benchmark_reports_ = benchmark_highwater_ = 0;
+  benchmark_idle_credit_stalls_ = benchmark_write_us_ = 0;
+  ESP_LOGI(TAG, "Protocol benchmark started: solid, gradient, blocks (4 Mbaud, 8N1)");
+}
+void NSPanelDisplay::start_legacy_protocol_benchmark() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (width_ != 454 || height_ != 320) {
+    ESP_LOGW(TAG, "Legacy benchmark requires the EU 454x320 panel");
+    return;
+  }
+  start_protocol_benchmark();
+  if (!benchmark_active_) return;
+  benchmark_legacy_ = true;
+  ESP_LOGI(TAG, "Legacy V92 patterns: solid, gradient, blocks, random; 8 full-screen frames per mode");
+}
+void NSPanelDisplay::start_legacy_protocol_benchmark_reuse() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  start_legacy_protocol_benchmark();
+  if (benchmark_active_) benchmark_reuse_ = true;
+}
+void NSPanelDisplay::start_legacy_protocol_benchmark_preencoded() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  start_legacy_protocol_benchmark();
+  if (benchmark_active_) benchmark_preencoded_ = true;
+}
+void NSPanelDisplay::benchmark_report_() {
+  static constexpr const char *NAMES[] = {"solid", "gradient", "blocks", "random"};
+  const uint32_t elapsed = millis() - benchmark_started_ms_;
+  const uint32_t bytes = bytes_sent() - benchmark_bytes_;
+  const unsigned util = elapsed ? unsigned((uint64_t(bytes) * 100) / (uint64_t(elapsed) * 400)) : 0;
+  ESP_LOGI(TAG, "%s %s: %u ms, %u UART bytes, %u rectangles, %u%% wire utilisation, %u faults, %u resyncs",
+           benchmark_legacy_ ? "Legacy benchmark" : "Protocol benchmark", NAMES[benchmark_mode_], unsigned(elapsed), unsigned(bytes),
+           unsigned(uint16_t(completed_rectangles() - benchmark_rectangles_)), util,
+           faults_ - benchmark_faults_, resyncs_ - benchmark_resyncs_);
+  if (benchmark_legacy_)
+    ESP_LOGI(TAG, "Legacy phases %s: build=%u us encode=%u us write=%u us service=%u credit_stalls=%u idle_credit=%u uart_stalls=%u reports=%u highwater=%u",
+             NAMES[benchmark_mode_], unsigned(benchmark_build_us_), unsigned(benchmark_encode_us_),
+             unsigned(benchmark_write_us_), benchmark_service_calls_, benchmark_credit_stalls_,
+             benchmark_idle_credit_stalls_, benchmark_uart_stalls_,
+             benchmark_reports_, benchmark_highwater_);
+  RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
+  benchmark_cache_ = nullptr;
+  benchmark_cache_size_ = 0;
+  ++benchmark_mode_;
+  benchmark_next_ = 0;
+  benchmark_started_ms_ = millis();
+  benchmark_bytes_ = bytes_sent();
+  benchmark_rectangles_ = completed_rectangles();
+  benchmark_faults_ = faults_;
+  benchmark_resyncs_ = resyncs_;
+  benchmark_build_us_ = benchmark_encode_us_ = 0;
+  benchmark_service_calls_ = benchmark_credit_stalls_ = benchmark_uart_stalls_ = 0;
+  benchmark_reports_ = benchmark_highwater_ = 0;
+  benchmark_idle_credit_stalls_ = benchmark_write_us_ = 0;
+  if (benchmark_mode_ == (benchmark_legacy_ ? 4u : 3u)) {
+    benchmark_active_ = false;
+    RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
+    benchmark_snapshot_ = nullptr;
+    dirty_.all();
+    ESP_LOGI(TAG, "%s complete; restoring UI", benchmark_legacy_ ? "Legacy benchmark" : "Protocol benchmark");
+    benchmark_legacy_ = false;
+  }
 }
 void NSPanelDisplay::draw_absolute_pixel_internal(int x, int y, Color color) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -245,18 +345,25 @@ bool NSPanelDisplay::identity_ok_(const char *reply) const {
   if (record_end == end + 1 || *record_end != ',') return false;
   return version == 92 && record == 61744;
 }
-void NSPanelDisplay::service_stream_() {
+void NSPanelDisplay::service_stream_(int incoming) {
   uint32_t started = micros();
-  uint8_t bytes[256];
-  size_t n = std::min<size_t>(available(), sizeof bytes);
-  if (n && !read_array(bytes, n)) {
+  uint8_t bytes[257];
+  size_t n = incoming >= 0 ? 1 : 0;
+  if (n) bytes[0] = uint8_t(incoming);
+  const size_t queued = std::min<size_t>(available(), sizeof bytes - n);
+  if (queued && !read_array(bytes + n, queued)) {
     fail_("UART read");
     return;
   }
+  n += queued;
   for (size_t i = 0; i < n; i++) {
     protocol::Reply r;
     const unsigned completed = stream_.completed();
     if (!stream_.feed(bytes[i], millis(), r)) continue;
+    if (benchmark_legacy_) {
+      ++benchmark_reports_;
+      benchmark_highwater_ = std::max(benchmark_highwater_, r.highwater);
+    }
     if (r.status == protocol::READY_BRIGHTNESS) {
       ESP_LOGI(TAG, "Live brightness capability confirmed");
       if (brightness_selected_) stream_.request_brightness(brightness_percent_);
@@ -282,7 +389,100 @@ void NSPanelDisplay::service_stream_() {
     deadline_ = millis() + 500;
     return;
   }
-  if (stream_.idle() && !exit_requested_ && !refresh_active_) {
+  if (stream_.idle() && benchmark_active_ && (exit_requested_ || abandon_requested_)) {
+    benchmark_active_ = false;
+    RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
+    benchmark_cache_ = nullptr;
+    RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
+    benchmark_snapshot_ = nullptr;
+    dirty_.all();
+    ESP_LOGW(TAG, "Protocol benchmark cancelled");
+  }
+  if (stream_.idle() && benchmark_active_) {
+    const unsigned count = benchmark_legacy_ ? 8 : 1;
+    if (benchmark_next_ == count) benchmark_report_();
+    else {
+      ++benchmark_next_;
+      const unsigned x = 0, y = 0, w = width_, h = height_;
+      const uint32_t build_started = benchmark_legacy_ ? micros() : 0;
+      if ((!benchmark_reuse_ && !benchmark_preencoded_) || benchmark_next_ == 1)
+        for (unsigned row = 0; row < h; ++row)
+          for (unsigned col = 0; col < w; ++col) {
+          uint16_t pixel;
+          if (benchmark_legacy_) {
+            if (benchmark_mode_ == 0) pixel = 0x07e0;
+            else if (benchmark_mode_ == 1) {
+              const uint16_t column = uint16_t((col * 31 / 453) << 11 | (col >> 4));
+              const uint16_t line = uint16_t((row * 63 / 319) << 5 | (row >> 4));
+              pixel = column ^ line;
+            } else if (benchmark_mode_ == 2) pixel = (col % 80 < 60 && row % 24 < 16) ? 0xffff : 0;
+            else {
+              uint32_t v = (row * w + col + 1) * 747796405u + 2891336453u;
+              v = ((v >> ((v >> 28) + 4)) ^ v) * 277803737u;
+              pixel = uint16_t((v >> 22) ^ v);
+            }
+          } else if (benchmark_mode_ == 0) pixel = 0x39e7;
+          else if (benchmark_mode_ == 1) pixel = uint16_t((((x + col) >> 3) & 31) << 11 |
+                                                         (((y + row) >> 2) & 63) << 5 |
+                                                         (((x + col + y + row) >> 3) & 31));
+          else pixel = ((col / 12 + row / 16) & 1) ? 0xf800 : 0x001f;
+          const size_t at = 2u * (row * w + col);
+          benchmark_snapshot_[at] = uint8_t(pixel);
+          benchmark_snapshot_[at + 1] = uint8_t(pixel >> 8);
+          }
+      if (benchmark_legacy_) benchmark_build_us_ += micros() - build_started;
+      if (benchmark_preencoded_ && benchmark_next_ == 1) {
+        const size_t capacity = size_t(w) * h * 2 + 8192;
+        RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::ALLOC_EXTERNAL);
+        benchmark_cache_ = allocator.allocate(capacity);
+        if (!benchmark_cache_) {
+          benchmark_active_ = false;
+          dirty_.all();
+          ESP_LOGE(TAG, "Benchmark encoded-cache PSRAM allocation failed");
+          return;
+        }
+        protocol::Encoder<StreamEngine::Pixels> encoder(w * h, {benchmark_snapshot_});
+        std::vector<uint8_t> body;
+        benchmark_cache_size_ = 0;
+        const uint32_t encode_started = micros();
+        while (encoder.next(body)) {
+          if (benchmark_cache_size_ + 2 + body.size() > capacity) {
+            benchmark_active_ = false;
+            allocator.deallocate(benchmark_cache_, capacity);
+            benchmark_cache_ = nullptr;
+            benchmark_cache_size_ = 0;
+            dirty_.all();
+            ESP_LOGE(TAG, "Benchmark encoded cache overflow");
+            return;
+          }
+          benchmark_cache_[benchmark_cache_size_++] = uint8_t(body.size());
+          benchmark_cache_[benchmark_cache_size_++] = uint8_t(body.size() >> 8);
+          std::memcpy(benchmark_cache_ + benchmark_cache_size_, body.data(), body.size());
+          benchmark_cache_size_ += body.size();
+        }
+        ESP_LOGI(TAG, "Preencoded %u bytes for %s in %u us", unsigned(benchmark_cache_size_),
+                 benchmark_mode_ == 0 ? "solid" : benchmark_mode_ == 1 ? "gradient" : benchmark_mode_ == 2 ? "blocks" : "random",
+                 unsigned(micros() - encode_started));
+        benchmark_started_ms_ = millis();
+        benchmark_bytes_ = bytes_sent();
+      }
+      const bool submitted = benchmark_preencoded_ ?
+          stream_.submit_cached(x, y, w, h, benchmark_snapshot_, benchmark_cache_, benchmark_cache_size_, millis()) :
+          stream_.submit(x, y, w, h, benchmark_snapshot_, millis());
+      if (!submitted) {
+        benchmark_active_ = false;
+        RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
+        benchmark_cache_ = nullptr;
+        RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
+        benchmark_snapshot_ = nullptr;
+        dirty_.all();
+        fail_("benchmark submit");
+        return;
+      }
+      submit_ms_ = millis();
+    }
+  }
+  if (stream_.idle() && !benchmark_active_ && !exit_requested_ && !refresh_active_) {
     unsigned x, y, w, h;
     if (dirty_.take(x, y, w, h)) {
       for (unsigned row = 0; row < h; row++)
@@ -297,18 +497,39 @@ void NSPanelDisplay::service_stream_() {
     }
   }
   do {
+    if (benchmark_legacy_) ++benchmark_service_calls_;
+    const uint32_t encode_started = benchmark_legacy_ ? micros() : 0;
     stream_.prepare(millis());
+    if (benchmark_legacy_) benchmark_encode_us_ += micros() - encode_started;
     if (stream_.failed()) {
       fail_(stream_.error());
       return;
     }
-    size_t count = std::min(stream_.allowance(), parent_->available_for_write());
-    if (!count) break;
+    const size_t allowance = stream_.allowance();
+    const size_t available = parent_->available_for_write();
+    size_t count = std::min(allowance, available);
+    if (!count) {
+      if (benchmark_legacy_ && stream_.pending()) {
+        if (!allowance) {
+          ++benchmark_credit_stalls_;
+          auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+          if (uart_wait_tx_done(uart_port_t(idf->get_hw_serial_number()), 0) == ESP_OK)
+            ++benchmark_idle_credit_stalls_;
+        }
+        else if (!available) ++benchmark_uart_stalls_;
+      }
+      break;
+    }
+    const uint32_t write_started = benchmark_legacy_ ? micros() : 0;
     write_array(stream_.data(), count);
+    if (benchmark_legacy_) benchmark_write_us_ += micros() - write_started;
     stream_.sent(count, millis());
   } while (uint32_t(micros() - started) < 1500);
 }
 void NSPanelDisplay::fail_(const char *reason) {
+  benchmark_active_ = false;
+  // The stream may still reference the benchmark snapshot until it is reset
+  // on re-entry, so retain it here and release it at the next safe start.
   ++faults_;
   ESP_LOGE(TAG, "Transport stopped: %s", reason);
   restore_page_ = false;
@@ -326,6 +547,11 @@ void NSPanelDisplay::fail_(const char *reason) {
   deadline_ = millis() + (terminal_active_ ? 500 : 40);
 }
 void NSPanelDisplay::finish_recovery_() {
+  benchmark_active_ = false;
+  RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
+  benchmark_cache_ = nullptr;
+  RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
+  benchmark_snapshot_ = nullptr;
   state_ = State::STOPPED;
   terminal_active_ = false;
   high_frequency_.stop();

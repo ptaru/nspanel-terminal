@@ -29,9 +29,19 @@ class StreamEngine {
     w_ = w;
     h_ = h;
     snapshot_ = snapshot;
+    cached_ = false;
     retries_ = 0;
     stage_ = Stage::RECT;
     last_report_ = now;
+    return true;
+  }
+  bool submit_cached(unsigned x, unsigned y, unsigned w, unsigned h, const uint8_t *snapshot,
+                     const uint8_t *cache, size_t cache_size, uint32_t now) {
+    if (!cache || !cache_size || !submit(x, y, w, h, snapshot, now)) return false;
+    cache_ = cache;
+    cache_size_ = cache_size;
+    cache_at_ = 0;
+    cached_ = true;
     return true;
   }
   // One bounded record per call. Progress resumes on the next main-loop pass.
@@ -61,13 +71,28 @@ class StreamEngine {
         break;
       case Stage::RECT:
         tx_ = protocol::record(session_, seq_++, protocol::RECT, x_, y_, w_, h_);
-        encoder_.emplace(w_ * h_, Pixels{snapshot_});
+        if (cached_) cache_at_ = 0;
+        else encoder_.emplace(w_ * h_, Pixels{snapshot_});
         stage_ = Stage::DATA;
         break;
       case Stage::DATA:
-        if (encoder_->next(body_))
+        if (cached_ && cache_at_ < cache_size_) {
+          if (cache_size_ - cache_at_ < 2) {
+            fail("cached length bounds");
+            break;
+          }
+          const unsigned length = protocol::get16(cache_ + cache_at_);
+          cache_at_ += 2;
+          if (!length || length > protocol::PAYLOAD || length > cache_size_ - cache_at_) {
+            fail("cached data bounds");
+            break;
+          }
+          body_.assign(cache_ + cache_at_, cache_ + cache_at_ + length);
+          cache_at_ += length;
           protocol::data_record(session_, seq_++, body_, raw_, tx_);
-        else {
+        } else if (!cached_ && encoder_->next(body_)) {
+          protocol::data_record(session_, seq_++, body_, raw_, tx_);
+        } else {
           stage_ = Stage::END;
           prepare(now);
         }
@@ -201,6 +226,9 @@ class StreamEngine {
   bool live_brightness_ = false, brightness_pending_ = false;
   uint8_t brightness_percent_ = 100;
   const uint8_t *snapshot_ = nullptr;
+  const uint8_t *cache_ = nullptr;
+  size_t cache_size_ = 0, cache_at_ = 0;
+  bool cached_ = false;
   std::optional<protocol::Encoder<Pixels>> encoder_;
   std::vector<uint8_t> tx_, body_, raw_;
   size_t at_ = 0;

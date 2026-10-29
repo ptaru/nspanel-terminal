@@ -73,6 +73,10 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void log_timings();
   void start_render_measurement();
   void report_render_measurement();
+  void start_protocol_benchmark();
+  void start_legacy_protocol_benchmark();
+  void start_legacy_protocol_benchmark_reuse();
+  void start_legacy_protocol_benchmark_preencoded();
 
  protected:
   int get_width_internal() override { return width_; }
@@ -114,7 +118,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool identity_ok_(const char *reply) const;
   void fail_(const char *);
   void finish_recovery_();
-  void service_stream_();
+  void service_stream_(int incoming = -1);
   bool upload_tft_();
   bool upload_ack_(uint32_t &position, uint32_t expected);
   State state_ = State::BOOT_WAIT;
@@ -158,6 +162,22 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   uint32_t measurement_bytes_ = 0, measurement_started_ms_ = 0;
   unsigned measurement_rectangles_ = 0, measurement_faults_ = 0, measurement_resyncs_ = 0;
   bool measurement_active_ = false;
+  bool benchmark_active_ = false;
+  bool benchmark_legacy_ = false;
+  bool benchmark_reuse_ = false;
+  bool benchmark_preencoded_ = false;
+  uint8_t *benchmark_cache_ = nullptr;
+  size_t benchmark_cache_size_ = 0;
+  uint8_t *benchmark_snapshot_ = nullptr;
+  unsigned benchmark_mode_ = 0, benchmark_next_ = 0;
+  uint32_t benchmark_started_ms_ = 0, benchmark_bytes_ = 0;
+  unsigned benchmark_rectangles_ = 0, benchmark_faults_ = 0, benchmark_resyncs_ = 0;
+  uint32_t benchmark_build_us_ = 0, benchmark_encode_us_ = 0;
+  unsigned benchmark_service_calls_ = 0, benchmark_credit_stalls_ = 0, benchmark_uart_stalls_ = 0;
+  unsigned benchmark_reports_ = 0, benchmark_highwater_ = 0;
+  unsigned benchmark_idle_credit_stalls_ = 0;
+  uint32_t benchmark_write_us_ = 0;
+  void benchmark_report_();
   void trace_(uint8_t type, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0, uint16_t d = 0);
   static void task_entry_(void *arg);
   void task_loop_();
