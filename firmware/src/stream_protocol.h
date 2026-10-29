@@ -2,6 +2,8 @@
 #pragma once
 #include <stdint.h>
 
+#include "panel_profile.h"
+
 /*
  * Protocol 6 receiver: COBS-delimited records, a 20-byte header, a body of at
  * most 512 bytes and a uint16 trailer CRC. The receiver validates the header
@@ -39,8 +41,8 @@ static void stream_repeat_portable(uint8_t hi, uint8_t lo, unsigned count) {
 #define STREAM_REPEAT(hi, lo, n) stream_repeat_portable(hi, lo, n)
 #endif
 
-/* Forward record kinds. Kinds 4..6 are unchanged from earlier protocol
- * versions; kind 7 is the live-brightness extension. */
+/* Forward record kinds. Kinds 4..6 are the stock command records; kind 7 is the
+ * live-brightness extension. */
 enum {
   STREAM_RECT = 1,
   STREAM_DATA,
@@ -52,8 +54,8 @@ enum {
 };
 
 /* Reverse-channel statuses. READY_BRIGHTNESS (134) is the capability signal:
- * a host that sees it may use live BRIGHTNESS records; a host that sees the
- * older READY (128) must fall back to command-mode brightness. */
+ * a host that sees it may use live BRIGHTNESS records; a host that sees READY
+ * (128) must fall back to command-mode brightness. */
 enum {
   STREAM_READY = 128,
   STREAM_BYE,
@@ -125,8 +127,9 @@ static unsigned stream_header_ok(StreamPackBits *s) {
     return 0;
   if (k != STREAM_SYNC && (s->fault || stream_u16(p + 6) != s->seq)) return 0;
   if (k == STREAM_RECT)
-    return !s->active && !n && w && h && x < 454 && y < 320 && w <= 454 - x &&
-           h <= 320 - y;
+    return !s->active && !n && w && h && x < NSPANEL_PANEL_WIDTH &&
+           y < NSPANEL_PANEL_HEIGHT && w <= NSPANEL_PANEL_WIDTH - x &&
+           h <= NSPANEL_PANEL_HEIGHT - y;
   if (k == STREAM_BRIGHTNESS) return !s->active && !n && x <= 100 && !y && !w && !h;
   if (x || y || w || h) return 0;
   if (k == STREAM_DATA) return s->active && n;
@@ -193,8 +196,8 @@ static __attribute__((always_inline)) inline void stream_decoded(
  * BRIGHTNESS (kind 7) has no body. Its percentage is in the header's x field.
  * After validation it calls the stock backlight routine at 0x0800bbfc with
  * force=1. The low bit in 0x0800bbfd is the Thumb entry. Status 135 confirms
- * the change. This is why the host must update before the TFT: an older host
- * cannot interpret status 134 and does not know kind 7.
+ * the change. A host without live-brightness support cannot interpret status
+ * 134 and does not know kind 7, so it must be updated before the TFT.
  */
 static unsigned stream_feed(StreamPackBits *s, uint8_t b) {
   if (b) {

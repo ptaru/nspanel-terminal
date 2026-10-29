@@ -6,30 +6,36 @@ the shipped TFT. For installation, use the [main README](../README.md); for the
 build commands, see [building](BUILDING.md); for the wire format, see
 [protocol](PROTOCOL.md).
 
-> **Experimental, one panel.** The current image was exercised on one EU
-> NSPanel. Offline checks cover the package, the ARM receiver and the host
-> protocol, but not electrical timing, worst-case stack use, long-duration
-> operation or recovery from every interrupted upload. Keep a rollback TFT.
+> **Experimental.** The EU image is validated on one EU NSPanel. The US image
+> is a source port validated offline; it has not been installed on US hardware.
+> Package checks cover image layout and CRCs, but not electrical timing,
+> worst-case stack use, long-duration operation or recovery from every
+> interrupted upload. Keep a rollback TFT.
 
 ## At a glance
 
-| Item | Value |
-| --- | --- |
-| Panel | EU Sonoff NSPanel, display `NX4832F035_011C`, MCU code F130 |
-| Visible area | 454×320 inside a 480×320 controller |
-| Native terminal | V92, protocol 6 |
-| Shipped TFT | [`firmware/nspanel-v92-blank.tft`](../firmware/nspanel-v92-blank.tft), 264,936 bytes |
-| Shipped SHA-256 | `a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c` |
-| Build input | [`firmware/nspanel-v92-blank-base.tft`](../firmware/nspanel-v92-blank-base.tft), SHA-256 `82434ab839ed14af45c655bdf1980848649c6a48081ee593c5cce397df7f3628` |
-| Source | [`firmware/src/`](../firmware/src/) |
-| Program size | 3,232 of 3,568 available bytes |
-| Loader size | 300 of 844 bytes |
-| Watchdog | 3,000 ms of host silence |
-| Live brightness | 0–100%, applied between rectangles, status 135 |
+| Item | EU | US |
+| --- | --- | --- |
+| Panel | Sonoff NSPanel, display `NX4832F035_011C`, MCU code F130 | same |
+| Orientation | landscape | portrait |
+| Visible area | 454×320 inside a 480×320 controller | full 320×480 |
+| Stock entry state | `0x20000101 == 2` | `0x20000101 == 1` |
+| Native terminal | protocol 6, native 92 | protocol 6, native 92 |
+| Base native version | 72 | 72 (unmodified blank exports) |
+| Shipped TFT | [`firmware/terminal-eu.tft`](../firmware/terminal-eu.tft), 264,936 bytes | [`firmware/terminal-us.tft`](../firmware/terminal-us.tft), 264,984 bytes |
+| Shipped SHA-256 | `a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c` | `512aa5bca9966352d21d324f0d12c3e3e607f49dcb7a9018044145a495b1d74e` |
+| Build input | [`firmware/base-eu.tft`](../firmware/base-eu.tft), SHA-256 `6314294af0822bfe1616d2f28ba4e81b15038a20b53abedd0f9aafacb64994ef` | [`firmware/base-us.tft`](../firmware/base-us.tft), SHA-256 `f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c` |
+| Source | [`firmware/src/`](../firmware/src/) | same |
+| Program size | 3,232 of 3,568 available bytes | 3,232 of 3,568 available bytes |
+| Loader size | 300 of 844 bytes | 296 of 844 bytes |
+| Watchdog | 3,000 ms of host silence | same |
+| Live brightness | 0–100%, applied between rectangles, status 135 | same |
 
-The shipped image and the base are both native V92 and blank. They differ in
-the 4 KiB terminal preamble, helper 0, and the package checksums that cover
-those regions. The native F130 image and the UI assets are byte-identical.
+Both bases are unmodified 72 blank exports (the EU Editor export and the stock
+US export). Each shipped image differs in
+the 4 KiB terminal preamble, helper 0, the native version metadata, and the
+package checksums. The EU image additionally applies the earlier EU native
+patches (state, dim and baud handling). The UI assets are unchanged.
 
 ## What the firmware modification changes
 
@@ -38,23 +44,28 @@ terminal replaces **helper 0**, a small loadable routine in the display's
 external flash, and uses the 1 KiB UART buffer and part of the suspended
 project's RAM pool as a direct rectangle receiver.
 
-Only four things are modified in the base TFT:
+The builder changes these regions in the selected base TFT:
 
 1. **Preamble at file offset `0x1000`.** The first 3,232 bytes become the
    compiled terminal program; the rest of the 4 KiB region is `0xFF`. This
    region maps to external SPI address `0x11000`.
-2. **Helper 0 at bundle offset `0x357B6 + 0x74`.** The original 844-byte slot
-   becomes the 300-byte loader, padded with `0xFF`.
+2. **Helper 0 at bundle offset `0x357B6 + 0x74`.** The 844-byte helper-0 slot
+   becomes the 300-byte EU loader or 296-byte US loader, padded with `0xFF`.
 3. **Helper-0 CRC** in the helper-0 entry at `0x357B6 + 0x10` and the enclosing
    helper bundle CRC at `0x357B6`.
-4. **Package CRCs** that cover the file: resource allocation, header 1 and the
+4. **EU native patches** at `0x2439`, `0xC072`, `0xD134`/`0xD158` and
+   `0xEB0C`/`0xEB10`. These carry the earlier EU state, dim and baud handling
+   onto the stock 72 native image. The US profile has no native code patches.
+5. **Native version metadata** at native offset `0xB8`, plus its two CRCs at
+   `0xB4` and `0xBE`. Both bases report 72; both shipped images report 92.
+6. **Package CRCs** that cover the file: resource allocation, header 1 and the
    whole-file final word.
 
-Everything else is preserved: the decoded F130 native image, page/font/picture
-tables, encoded headers, helpers 1–8 and the stock updater. The builder enforces
-this with a patch-region whitelist; the shipped build changes 2,872 bytes. That
-is why the terminal can return to the stock blank page and why a same-version
-TFT update still follows the stock install path.
+Apart from those regions, the page/font/picture tables, encoded headers,
+helpers 1–8 and the stock updater are preserved. The builder enforces this with
+a patch-region whitelist; the shipped builds change 4,102 bytes (EU) and
+4,083 bytes (US). The terminal can therefore return to the stock blank page, and
+TFT updates use the stock Nextion updater.
 
 The source does **not** create a standalone display firmware. It is an overlay
 that calls fixed stock routines and is loaded by the stock helper dispatcher.
@@ -85,7 +96,8 @@ project, which returns to the blank page.
 
 ## TFT package layout
 
-Relevant offsets in the shipped 264,936-byte image:
+The offsets below are common to both profiles. The EU file is 264,936 bytes;
+the US file is 264,984 bytes, so the last four bytes move accordingly.
 
 | File offset | Size | Contents |
 | --- | ---: | --- |
@@ -93,15 +105,18 @@ Relevant offsets in the shipped 264,936-byte image:
 | `0x1000` | 0x1000 | Terminal preamble. First 3,232 bytes are code; remainder `0xFF`. Maps to SPI `0x11000`. |
 | `0x10000` | 0x30000 | Resource allocation (fonts, pictures, project data). Unchanged. |
 | `0x14532` | — | Native bundle start. First record follows a 4-byte count. |
-| `0x14566` | 60,352 | Encoded F130 native image (XOR 9 on disk). Unchanged. |
+| `0x14566` | 60,352 | Encoded F130 native image (XOR 9 on disk). The EU profile applies native patches; both profiles update the version metadata. |
 | `0x357B6` | 0x15E0 | Helper bundle: enclosing CRC, count, nine entries. Helper 0 starts at `+0x74`. |
-| `0x357B6 + 0x74` | 844 | Helper 0 slot: 300-byte loader plus `0xFF` padding. |
+| `0x357B6 + 0x74` | 844 | Helper 0 slot: EU 300-byte or US 296-byte loader plus `0xFF` padding. |
 | last 4 bytes | 4 | Whole-file CRC word. |
 
-The F130 record reports native version 92 at record offset `0xB8`. The decoded
-image SHA-256 is
-`be6ef7a50c901d1c8135387e502553f7ad295223c967cdaf2ca564b8251f3d79`.
-[`tools/verify_tft.py`](../tools/verify_tft.py) checks all of this.
+Both bases report native version 72 and both shipped images report 92 at record
+offset `0xB8`. The full-XOR image SHA-256 is
+`be6ef7a50c901d1c8135387e502553f7ad295223c967cdaf2ca564b8251f3d79` for the EU
+image and
+`b8ee56812e8aa92e653ba5f46a5745726295451f58a658b993bcf0ae5aaff4fb` for the US
+image. [`tools/verify_tft.py`](../tools/verify_tft.py) checks the profile-specific
+values.
 
 ### Checksums
 
@@ -127,7 +142,8 @@ The stock runtime reaches helper 0 through its normal width/height callback
 (state 4). The loader runs with interrupts and the project interpreter
 suspended.
 
-1. **Preconditions.** Width 480, height 320, state byte `0x20000101 == 2`,
+1. **Preconditions.** The compiled profile's stock geometry (EU 480×320 or US
+   320×480) and project state byte (`0x20000101 == 2` on EU, `== 1` on US),
    DMA channel 1 disabled and USART1 DMAR off. If any check fails,
    `helper_entry` returns 0 without changing anything.
 2. **Save.** USART1 CR1/CR3 and the USART1 NVIC enable bit are saved.
@@ -140,10 +156,9 @@ suspended.
    needed and restores the stock baud rate and UART/DMA state. The loader
    clears the borrowed buffer, restores the stock touch cache and continuation,
    re-enables the saved interrupt state and returns to the stock runtime.
-6. **Return to UI.** The original state-4 continuation reloads project
-   variables and the blank page. The loader must not call that continuation
-   while the overlay is still executing, because it overwrites the helper's
-   code.
+6. **Return to UI.** The stock state-4 continuation reloads project variables
+   and the blank page. The loader must not call that continuation while the
+   overlay is still executing, because it overwrites the helper's code.
 
 The return value is the held-touch mask (plus bit 5 for malformed contact data),
 which the loader writes back to the stock touch cache.
@@ -162,15 +177,12 @@ the stock runtime.
 | `0x20000000..0x200004F0` | 1,264 | Stock globals, touch cache, callback tables. Partly reused; preserved values are restored. |
 | `0x200004F0..0x200008F0` | 1,024 | UART command buffer, used as the DMA ring. |
 | `0x200008F0..0x200016F0` | 3,584 | Project variable pool. `sys0..2` occupy the first 16 bytes; the program starts at `0x20000900`. |
-| `0x20000900..0x200016F0` | 3,568 | Terminal program (3,232 used, 336 spare). |
+| `0x20000900..0x200016F0` | 3,568 | Terminal program (3,232 used in both profiles, 336 spare). |
 | `0x200016F0..0x20001A74` | 900 | Shared graphics/project/helper scratch. The loader itself is loaded here. |
 | `0x20001B1C` | — | Stock stack canary. Initial main SP is `0x20001F98`. |
 
 The program keeps its decoder, touch state and 40-byte work buffer on the
-stack. It has no heap, no libc and no writable static state. The lab
-emulator checks assert that the observed stack pointer stays above the
-`0x20001B1C` canary; that is path coverage, not a formal worst-case stack
-proof.
+stack. It has no heap, no libc and no writable static state.
 
 ## Receiver
 
@@ -214,8 +226,7 @@ every byte still gets the same three-store sequence. No GPIO reinitialisation,
 clock change or shortened WR pulse is introduced.
 
 Electrical timing, pulse widths, tearing and the LCD controller's true limit
-have **not** been measured with an oscilloscope. The performance evidence is
-instruction counts and a single-panel visual check, not a timing guarantee.
+have **not** been measured with an oscilloscope. There is no timing guarantee.
 
 ## Touch
 
@@ -244,17 +255,23 @@ The terminal advertises live brightness by sending **status 134** instead of
 
 The stock routine updates the saved brightness byte and the PB8/TIM16
 backlight output. The change takes effect between rectangles, without exiting
-the terminal. A host that only knows the older V92 image uses command-mode
-brightness and briefly exits; an older host cannot stream to this TFT. **Update
-the ESP32 component before updating the TFT.**
+the terminal. A host without live-brightness support uses command-mode
+brightness and briefly exits; it cannot stream to this TFT. **Update the ESP32
+component before updating the TFT.**
+
+In the offline US emulation, the stock US state-4 continuation writes its own
+saved dim value back when the blank page is restored after EXIT. The live change
+still applies during the session, and the ESPHome component re-applies its
+selected level on the next terminal entry. This behaviour has not been checked
+on US hardware.
 
 ## Watchdog
 
 If no input bytes arrive for 3,000 ms, the receiver reports an error with flag
 `0x2000`, restores the stock runtime and returns to the blank page. The 3-second
-value replaced an earlier 300 ms watchdog so ordinary host scheduling pauses do
-not tear down a healthy session. It is a fixed constant in
-`terminal_receiver.c`; changing it requires a rebuild and a new TFT.
+value tolerates ordinary host scheduling pauses without tearing down a healthy
+session. It is a fixed constant in `terminal_receiver.c`; changing it requires a
+rebuild and a new TFT.
 
 The watchdog covers host silence, not a hung display or a failed ESP32 image.
 A display that stays black after a crash is a recovery case; see
@@ -262,18 +279,19 @@ A display that stays black after a crash is a recovery case; see
 
 ## Building and reproducibility
 
-The public source builds the shipped TFT byte-for-byte with the documented
+The public source builds each shipped TFT byte-for-byte with the documented
 clang target. The builder:
 
 - compiles the receiver at `0x20000900` and the loader at `0x200016F0`;
 - extracts the allocatable sections and applies only ARM REL relocations;
 - generates the program-size/CRC/entry header for the loader;
 - patches the preamble and helper slot and repairs the affected CRCs;
-- asserts the native F130 image is unchanged.
+- asserts the native F130 image is unchanged for the selected profile.
 
 See [building](BUILDING.md) for the commands, toolchain and troubleshooting.
 Different clang versions can produce different (but structurally valid) code;
-`tools/build_tft.py --check` is the byte-for-byte gate for the official image.
+`tools/build_tft.py --panel eu --check` and `--panel us --check` are the
+byte-for-byte gates for the two official images.
 
 ## Modifying safely
 
@@ -282,42 +300,51 @@ Different clang versions can produce different (but structurally valid) code;
   exceeded.
 - **Protocol changes.** A new record kind or changed status needs a matching
   ESPHome component. Bump the component version and the native/protocol version
-  together; do not ship a TFT that an older host cannot drive safely.
+  together; do not ship a TFT that the host cannot drive safely.
 - **Watchdog.** Edit the `3000` constant, rebuild, verify the package and
   upload. A shorter value increases the chance of tearing down a slow host; a
   longer value delays the blank fallback.
 - **Brightness.** Keep the range check and the between-rectangles rule. The
   stock routine expects 0..100 and `force=1` for an immediate update.
-- **Base image.** The patch is tied to the documented base and helper bundle.
-  Do not substitute a TFT from a newer Nextion Editor or another MCU code.
-- **Tests.** At minimum run `tools/build_tft.py --check`,
-  `tools/verify_tft.py`, and any host protocol tests available in your
-  checkout. Hardware uploads are separate and risky.
+- **Base image.** The patch is tied to the selected profile base and helper
+  bundle. Do not substitute a TFT from a newer Nextion Editor or another MCU
+  code; add a profile with its own geometry and native version instead.
+- **Versioning.** `92` identifies our terminal revision on both panel profiles.
+  A changed package must get a new version because the stock updater skips a
+  valid image with the same version. Stock images report `72`.
+- **Tests.** At minimum run `tools/build_tft.py --panel eu --check`,
+  `tools/build_tft.py --panel us --check`, the matching `verify_tft.py`
+  commands, and any host protocol tests available in your checkout. Hardware
+  uploads are separate and risky.
 
 ## Limits
 
-- EU NSPanel only; not the US panel and not NSPanel Pro.
-- Blank UI only; there is no original Sonoff UI in the shipped image.
+- EU and US NSPanel only; not NSPanel Pro.
+- The EU image is validated on one EU panel. The US image is validated offline
+  only and has not been run on US hardware.
+- Blank UI only; there is no Sonoff UI in the shipped images.
 - CRC integrity, not a cryptographic signature. Anyone who can replace the
   served TFT can replace the display firmware.
 - No demonstrated standalone recovery bootloader; recovery depends on the
   stock updater and a reachable ESP32.
-- One panel, one hardware trial. No broad compatibility claim.
+- No broad compatibility claim.
 - No electrical timing, long-run endurance, tearing or worst-case stack proof.
-- The visible area is 454×320; the rightmost 26 columns of the controller are
-  not visible.
+- The EU visible area is 454×320; the rightmost 26 columns of its controller are
+  not visible. The US panel exposes the full 320×480.
 
 ## Source map
 
 | File | Role |
 | --- | --- |
+| [`panel_profile.h`](../firmware/src/panel_profile.h) | Compile-time EU/US visible and stock-entry geometry. |
 | [`terminal_api.h`](../firmware/src/terminal_api.h) | Register addresses, stock entry points, touch report structure. |
 | [`terminal_receiver.c`](../firmware/src/terminal_receiver.c) | Main receiver, entry/exit, reports, watchdog. |
 | [`stream_protocol.h`](../firmware/src/stream_protocol.h) | Protocol-6 decoder, PackBits, brightness record. |
 | [`stream_touch.h`](../firmware/src/stream_touch.h) | Goodix bit-banged I2C and polling. |
 | [`terminal_loader.c`](../firmware/src/terminal_loader.c) | Helper-0 loader and restoration. |
 | [`tools/build_tft.py`](../tools/build_tft.py) | Compiler, fixed-address assembler and TFT patcher. |
-| [`tools/verify_tft.py`](../tools/verify_tft.py) | Structural verifier. |
+| [`tools/verify_tft.py`](../tools/verify_tft.py) | Profile-aware structural verifier. |
+| [`tools/panel_profiles.py`](../tools/panel_profiles.py) | Shared EU/US base, version and hash metadata. |
 
 Code is MIT licensed; see [LICENSE](../LICENSE). The TFT contains the Nextion
 runtime; see [NOTICE](../NOTICE).

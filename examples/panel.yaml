@@ -1,4 +1,4 @@
-# EU NSPanel only. The US version is oriented differently.
+# EU NSPanel landscape 454x320. For the US portrait 320x480 panel, see panel-us.yaml.
 esphome:
   name: nspanel
   friendly_name: NSPanel
@@ -80,6 +80,8 @@ display:
   - platform: nspanel_terminal
     id: panel
     uart_id: tf_uart
+    width: 454
+    height: 320
     update_interval: never
     auto_clear_enabled: false
     tft_url: !secret tft_url

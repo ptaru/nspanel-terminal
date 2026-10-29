@@ -5,31 +5,66 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "esphome/components/uart/uart_component_esp_idf.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "nspanel_touchscreen.h"
+#ifdef USE_LVGL
+#include <lvgl.h>
+#endif
 namespace esphome::nspanel_terminal {
 static const char *const TAG = "nspanel_terminal";
-NSPanelDisplay::~NSPanelDisplay() { RAMAllocator<uint8_t>().deallocate(snapshot_, 454 * 16 * 2); }
+NSPanelDisplay::~NSPanelDisplay() {
+  task_stop_ = true;
+  while (task_running_) vTaskDelay(1);
+  RAMAllocator<uint8_t>().deallocate(snapshot_, size_t(width_) * 16 * 2);
+}
 void NSPanelDisplay::setup() {
   RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::ALLOC_EXTERNAL);
-  this->buffer_ = allocator.allocate(454 * 320 * 2);
-  snapshot_ = allocator.allocate(454 * 16 * 2);
+  const size_t framebuffer_bytes = size_t(width_) * height_ * 2;
+  this->buffer_ = allocator.allocate(framebuffer_bytes);
+  snapshot_ = allocator.allocate(size_t(width_) * 16 * 2);
   if (!buffer_ || !snapshot_) {
     ESP_LOGE(TAG, "PSRAM framebuffer/snapshot allocation failed");
     mark_failed();
     state_ = State::STOPPED;
     return;
   }
-  std::memset(buffer_, 0, 454 * 320 * 2);
+  std::memset(buffer_, 0, framebuffer_bytes);
+  dirty_.set_dimensions(width_, height_);
   dirty_.all();
   deadline_ = millis() + 2000;
+  task_stop_ = false;
+  if (xTaskCreatePinnedToCore(task_entry_, "nspanel_uart", 6144, this, 2, &task_, 0) != pdPASS) {
+    ESP_LOGE(TAG, "Transport task creation failed");
+    mark_failed();
+    state_ = State::STOPPED;
+  } else while (!task_running_) vTaskDelay(1);
+}
+void NSPanelDisplay::task_entry_(void *arg) {
+  auto *self = static_cast<NSPanelDisplay *>(arg);
+  self->task_running_ = true;
+  self->task_loop_();
+  self->task_running_ = false;
+  vTaskDelete(nullptr);
+}
+void NSPanelDisplay::task_loop_() {
+  while (!task_stop_) {
+    bool streaming;
+    {
+      std::lock_guard<std::recursive_mutex> lock(mutex_);
+      streaming = state_ == State::STREAM;
+      if (streaming && !abandon_requested_) service_stream_();
+    }
+    vTaskDelay(pdMS_TO_TICKS(streaming ? 1 : 10));
+  }
 }
 void NSPanelDisplay::dump_config() {
-  ESP_LOGCONFIG(TAG, "NSPanel V92 protocol6 display, 454x320 RGB565, PSRAM, UART 4 Mbaud");
+  ESP_LOGCONFIG(TAG, "NSPanel protocol6 display, %ux%u RGB565, PSRAM, UART 4 Mbaud", unsigned(width_),
+                unsigned(height_));
   LOG_UPDATE_INTERVAL(this);
 }
 void NSPanelDisplay::trace_(uint8_t type, uint16_t a, uint16_t b, uint16_t c, uint16_t d) {
@@ -38,8 +73,12 @@ void NSPanelDisplay::trace_(uint8_t type, uint16_t a, uint16_t b, uint16_t c, ui
   trace_head_ = (trace_head_ + 1) % trace_buf_.size();
   if (trace_count_ < trace_buf_.size()) ++trace_count_;
 }
-void NSPanelDisplay::trace_edge(bool down, uint16_t x, uint16_t y) { trace_(down ? 1 : 2, x, y); }
+void NSPanelDisplay::trace_edge(bool down, uint16_t x, uint16_t y) {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  trace_(down ? 1 : 2, x, y);
+}
 void NSPanelDisplay::log_timings() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (!diagnostics_ || !trace_count_) return;
   unsigned start = (trace_head_ + trace_buf_.size() - trace_count_) % trace_buf_.size();
   for (unsigned i = 0; i < trace_count_; ++i) {
@@ -48,6 +87,7 @@ void NSPanelDisplay::log_timings() {
   }
 }
 void NSPanelDisplay::start_render_measurement() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   measurement_bytes_ = bytes_sent();
   measurement_rectangles_ = completed_rectangles();
   measurement_faults_ = faults_;
@@ -59,6 +99,7 @@ void NSPanelDisplay::start_render_measurement() {
   ESP_LOGI(TAG, "Render measurement started");
 }
 void NSPanelDisplay::report_render_measurement() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (!measurement_active_) {
     ESP_LOGW(TAG, "Render measurement has not started");
     return;
@@ -75,9 +116,10 @@ void NSPanelDisplay::report_render_measurement() {
   measurement_active_ = false;
 }
 void NSPanelDisplay::draw_absolute_pixel_internal(int x, int y, Color color) {
-  if (this->buffer_ == nullptr || x < 0 || y < 0 || x >= protocol::WIDTH || y >= protocol::HEIGHT) return;
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (this->buffer_ == nullptr || x < 0 || y < 0 || x >= width_ || y >= height_) return;
   const uint16_t rgb565 = (uint16_t(color.r & 0xf8) << 8) | (uint16_t(color.g & 0xfc) << 3) | (color.b >> 3);
-  const size_t offset = 2u * (size_t(y) * protocol::WIDTH + size_t(x));
+  const size_t offset = 2u * (size_t(y) * width_ + size_t(x));
   if (this->buffer_[offset] == uint8_t(rgb565) && this->buffer_[offset + 1] == uint8_t(rgb565 >> 8)) return;
   this->buffer_[offset] = uint8_t(rgb565);
   this->buffer_[offset + 1] = uint8_t(rgb565 >> 8);
@@ -85,16 +127,22 @@ void NSPanelDisplay::draw_absolute_pixel_internal(int x, int y, Color color) {
 }
 
 void NSPanelDisplay::update() {
-  if (this->buffer_ != nullptr) this->do_update_();
+  if (this->buffer_ == nullptr) return;
+  // A lambda/page writer may make many pixel calls. Hold new snapshots until
+  // the whole update finishes, while the transport task keeps servicing UART.
+  set_refresh_active(true);
+  this->do_update_();
+  set_refresh_active(false);
 }
 
 void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, const uint8_t *ptr,
                                     display::ColorOrder order, display::ColorBitness bitness, bool big_endian,
                                     int x_offset, int y_offset, int x_pad) {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (this->buffer_ == nullptr) return;
   if (order != display::COLOR_ORDER_RGB || bitness != display::COLOR_BITNESS_565 || big_endian ||
       this->get_rotation() != display::DISPLAY_ROTATION_0_DEGREES || this->is_clipping() || x_start < 0 ||
-      y_start < 0 || w <= 0 || h <= 0 || x_start + w > protocol::WIDTH || y_start + h > protocol::HEIGHT ||
+      y_start < 0 || w <= 0 || h <= 0 || x_start + w > width_ || y_start + h > height_ ||
       x_offset < 0 || y_offset < 0 || x_pad < 0) {
     display::Display::draw_pixels_at(x_start, y_start, w, h, ptr, order, bitness, big_endian, x_offset, y_offset,
                                      x_pad);
@@ -104,7 +152,7 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
   int changed = 0;
   for (int row = 0; row < h; ++row) {
     const uint8_t *source = ptr + size_t(y_offset + row) * source_stride + 2u * x_offset;
-    uint8_t *target = this->buffer_ + 2u * (size_t(y_start + row) * protocol::WIDTH + x_start);
+    uint8_t *target = this->buffer_ + 2u * (size_t(y_start + row) * width_ + x_start);
     if (std::memcmp(source, target, size_t(w) * 2u) == 0) continue;
     // Compare on the same 8-pixel grid as DirtyRows. A wide LVGL flush can
     // contain several independent changes, with unchanged tiles between them.
@@ -180,6 +228,23 @@ bool NSPanelDisplay::change_baud_(uint32_t baud) {
   parent_->set_baud_rate(baud);
   return true;
 }
+bool NSPanelDisplay::identity_ok_(const char *reply) const {
+  // The stock connect reply starts with the model, native version and MCU code:
+  // NX4832F035_011C,<native>,61744,... . Our EU and US images both report
+  // native revision 92; stock images report 72. Panel geometry is checked
+  // separately by the loader through the stock entry dimensions and state.
+  static constexpr char MODEL[] = "NX4832F035_011C,";
+  const char *field = std::strstr(reply, MODEL);
+  if (field == nullptr) return false;
+  field += sizeof(MODEL) - 1;
+  char *end = nullptr;
+  const unsigned long version = std::strtoul(field, &end, 10);
+  if (end == field || *end != ',') return false;
+  char *record_end = nullptr;
+  const unsigned long record = std::strtoul(end + 1, &record_end, 10);
+  if (record_end == end + 1 || *record_end != ',') return false;
+  return version == 92 && record == 61744;
+}
 void NSPanelDisplay::service_stream_() {
   uint32_t started = micros();
   uint8_t bytes[256];
@@ -200,7 +265,7 @@ void NSPanelDisplay::service_stream_() {
       ESP_LOGI(TAG, "Live brightness ACK received");
     if (r.status == protocol::ERROR && !stream_.failed()) ++resyncs_;
     if (stream_.completed() != completed) trace_(5, uint16_t(millis() - submit_ms_));
-    if (touchscreen_ && r.freshness == 1 && !touchscreen_->new_report(r.mask & 1, r.x, r.y)) {
+    if (touchscreen_ && r.freshness == 1 && !pending_touches_.push(r.mask & 1, r.x, r.y)) {
       fail_("touch edge queue overflow");
       return;
     }
@@ -217,11 +282,11 @@ void NSPanelDisplay::service_stream_() {
     deadline_ = millis() + 500;
     return;
   }
-  if (stream_.idle() && !exit_requested_) {
+  if (stream_.idle() && !exit_requested_ && !refresh_active_) {
     unsigned x, y, w, h;
     if (dirty_.take(x, y, w, h)) {
       for (unsigned row = 0; row < h; row++)
-        std::memcpy(snapshot_ + 2 * row * w, buffer_ + 2 * ((y + row) * 454 + x), 2 * w);
+        std::memcpy(snapshot_ + 2 * row * w, buffer_ + 2 * ((y + row) * width_ + x), 2 * w);
       if (!stream_.submit(x, y, w, h, snapshot_, millis())) {
         dirty_.all();
         fail_("rectangle submit");
@@ -242,17 +307,14 @@ void NSPanelDisplay::service_stream_() {
     write_array(stream_.data(), count);
     stream_.sent(count, millis());
   } while (uint32_t(micros() - started) < 1500);
-  if (stream_.idle())
-    high_frequency_.stop();
-  else
-    high_frequency_.start();
 }
 void NSPanelDisplay::fail_(const char *reason) {
   ++faults_;
   ESP_LOGE(TAG, "Transport stopped: %s", reason);
   restore_page_ = false;
   dirty_.all();
-  if (touchscreen_) touchscreen_->reset_contacts();
+  touch_reset_pending_ = true;
+  pending_touches_ = TouchQueue();
   if (startup_retry_ && startup_attempts_ < 2)
     ++startup_attempts_;
   else
@@ -271,6 +333,7 @@ void NSPanelDisplay::finish_recovery_() {
   if (startup_retry_ && !exit_requested_) request_enter();
 }
 void NSPanelDisplay::request_abandon() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (state_ != State::STREAM) return;
   abandon_requested_ = true;
   exit_requested_ = true;
@@ -279,6 +342,7 @@ void NSPanelDisplay::request_abandon() {
   ESP_LOGW(TAG, "deliberate host stop: suppressing all records for 4s");
 }
 void NSPanelDisplay::request_enter() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (state_ != State::STOPPED || !buffer_ || !snapshot_) return;
   if (!startup_retry_) {
     startup_retry_ = true;
@@ -293,6 +357,7 @@ void NSPanelDisplay::request_enter() {
   deadline_ = millis() + 300;
 }
 void NSPanelDisplay::request_tft_upload() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (tft_url_.empty() || upload_pending_) {
     ESP_LOGE(TAG, "TFT upload unavailable or already pending");
     return;
@@ -302,6 +367,7 @@ void NSPanelDisplay::request_tft_upload() {
   if (state_ != State::STOPPED) request_exit();
 }
 void NSPanelDisplay::request_brightness(int percent) {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (percent < 0 || percent > 100) {
     ESP_LOGE(TAG, "Brightness must be 0-100%%");
     return;
@@ -441,6 +507,33 @@ bool NSPanelDisplay::upload_tft_() {
   return true;
 }
 void NSPanelDisplay::loop() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+#ifdef USE_LVGL
+  if (!refresh_hooks_installed_) {
+    if (auto *display = lv_display_get_default()) {
+      lv_display_add_event_cb(display, [](lv_event_t *e) {
+        static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->set_refresh_active(true);
+      }, LV_EVENT_REFR_START, this);
+      lv_display_add_event_cb(display, [](lv_event_t *e) {
+        static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->set_refresh_active(false);
+      }, LV_EVENT_REFR_READY, this);
+      refresh_hooks_installed_ = true;
+      ESP_LOGI(TAG, "LVGL refresh boundary gating enabled");
+    }
+  }
+#endif
+  if (touchscreen_) {
+    if (touch_reset_pending_) {
+      touchscreen_->reset_contacts();
+      touch_reset_pending_ = false;
+    }
+    TouchSample sample;
+    if (pending_touches_.pop(sample)) {
+      if (!touchscreen_->new_report(sample.down, sample.x, sample.y)) {
+        fail_("touch report rejected");
+      }
+    }
+  }
   const uint32_t loop_us = micros();
   if (last_loop_us_) {
     const uint32_t gap = loop_us - last_loop_us_;
@@ -480,7 +573,7 @@ void NSPanelDisplay::loop() {
     case State::CONNECT:
       if (read_terminated_()) {
         rx_[std::min(rx_count_, rx_.size() - 1)] = 0;
-        if (!std::strstr(reinterpret_cast<char *>(rx_.data()), "NX4832F035_011C,92,61744,"))
+        if (!identity_ok_(reinterpret_cast<char *>(rx_.data())))
           fail_("native identity");
         else
           send_query_(State::PAGE, "sendme");
@@ -564,10 +657,9 @@ void NSPanelDisplay::loop() {
         fail_("baud switch");
         break;
       }
-      stream_.begin(session_, now);
+      stream_.begin(session_, now, width_, height_);
       if (exit_requested_) stream_.request_exit();
       state_ = State::STREAM;
-      high_frequency_.start();
       break;
     case State::STREAM:
       if (abandon_requested_) {
@@ -578,7 +670,6 @@ void NSPanelDisplay::loop() {
         break;
       }
       if (stream_.stage() != StreamEngine::Stage::READY) startup_retry_ = false;
-      service_stream_();
       break;
     case State::RECOVER_WAIT:
       if (overdue) {
@@ -688,7 +779,7 @@ void NSPanelDisplay::loop() {
     case State::VERIFY_IDENTITY:
       if (read_terminated_()) {
         rx_[std::min(rx_count_, rx_.size() - 1)] = 0;
-        if (!std::strstr(reinterpret_cast<char *>(rx_.data()), "NX4832F035_011C,92,61744,")) {
+        if (!identity_ok_(reinterpret_cast<char *>(rx_.data()))) {
           ESP_LOGE(TAG, "Restored identity mismatch");
           startup_retry_ = false;
         } else
@@ -747,6 +838,9 @@ void NSPanelDisplay::loop() {
   }
 }
 void NSPanelDisplay::on_shutdown() {
+  task_stop_ = true;
+  while (task_running_) vTaskDelay(1);
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (state_ == State::STREAM && stream_.idle()) {
     stream_.request_exit();
     stream_.prepare(millis());

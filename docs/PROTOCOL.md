@@ -1,7 +1,7 @@
 # Terminal protocol
 
-This is the wire format between the ESP32 host component and the V92 display
-terminal. It is implemented by
+This is the wire format between the ESP32 host component and the NSPanel display
+terminal (EU landscape or US portrait). It is implemented by
 [`firmware/src/stream_protocol.h`](../firmware/src/stream_protocol.h) and
 [`components/nspanel_terminal/`](../components/nspanel_terminal/). See
 [display firmware internals](FIRMWARE.md) for the display-side memory and entry
@@ -24,7 +24,8 @@ The host enters the terminal through the stock `touch_j` path with:
 
 The terminal switches to the requested baud, configures DMA, and sends READY
 (status 134 for this build, because it supports live brightness). A host that
-sees 128 knows the older V92 image and must use command-mode brightness.
+sees 128 is connected to a terminal without live brightness and must use
+command-mode brightness.
 
 `EXIT` or the display watchdog returns to the stock blank page at 115200 baud.
 The host saves the page, `bkcmd` and `sys0..2` before entry and restores and
@@ -81,8 +82,9 @@ and semantic checks must pass before any body bytes can reach the LCD.
 
 Validation rules:
 
-- `RECT` requires no active rectangle, a zero body, `w` and `h` nonzero,
-  `x < 454`, `y < 320`, `w <= 454 - x` and `h <= 320 - y`.
+- `RECT` requires no active rectangle, a zero body, `w` and `h` nonzero, and a
+  rectangle inside the configured panel: `x < W`, `y < H`, `w <= W - x` and
+  `h <= H - y`, where `W×H` is 454×320 (EU) or 320×480 (US).
 - `DATA` requires an active rectangle and a nonzero body. Its body must decode
   to a whole number of pixels; an incomplete PackBits token is an error.
 - `END` requires an active rectangle and exactly zero remaining pixel bytes.
@@ -134,11 +136,11 @@ Capability negotiation:
 | Terminal | READY status | Host behaviour |
 | --- | ---: | --- |
 | This build | 134 | Queue a `BRIGHTNESS` record at the next idle point; wait for 135. |
-| Older V92 | 128 | Use command-mode brightness, which briefly exits the terminal. |
+| EU or US native without live brightness | 128 | Use command-mode brightness, which briefly exits the terminal. |
 
-The host must be updated **before** the TFT. An older host rejects status 134
-safely and cannot stream to the new image with live brightness. The current
-component implements both paths.
+A host without live-brightness support must be updated **before** the TFT: it
+rejects status 134 safely and cannot stream to the live-brightness image. The
+current component implements both paths.
 
 ## Reverse reports
 
@@ -167,7 +169,7 @@ Status values:
 
 | Status | Name | Meaning |
 | ---: | --- | --- |
-| 128 | `READY` | Older terminal with command-mode brightness. |
+| 128 | `READY` | Terminal without live brightness; command-mode brightness. |
 | 129 | `BYE` | Clean exit. |
 | 130 | `PROGRESS` | Credit/touch update. |
 | 131 | `ERROR` | Protocol or hardware fault. |
@@ -225,12 +227,14 @@ not an acknowledgement of a whole block.
 
 ## Compatibility
 
-- Protocol version 6 is tied to native version 92 on the display and the
-  current ESPHome component. Do not mix a component and TFT from different
-  protocol revisions.
+- Protocol version 6 is tied to our native revision 92 on both panel profiles.
+  Stock images report 72 and are rejected by the component. Panel geometry is
+  selected by `width`/`height` and checked separately by the display loader, not
+  inferred from the native version. Do not mix a component and TFT from
+  different protocol revisions or panel profiles.
 - The live-brightness extension uses kind 7, READY 134 and BRIGHTNESS_DONE 135.
-  It is backward-compatible only in the sense that an older host safely falls
-  back from 134; the TFT cannot be driven with live brightness by that host.
+  A host without live-brightness support safely falls back from 134, but cannot
+  drive the live-brightness extension.
 - A new record kind, status, field meaning or pixel format is an incompatible
   protocol change. Bump the version and ship a matching host and TFT.
 - The display UART must be owned exclusively by `nspanel_terminal` during a

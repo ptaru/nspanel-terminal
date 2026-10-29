@@ -12,7 +12,7 @@ void NSPanelTouchscreen::set_panel(NSPanelDisplay *panel) {
 }
 
 bool NSPanelTouchscreen::new_report(bool down, uint16_t x, uint16_t y) {
-  if (down && (x >= 454 || y >= 320)) return false;
+  if (down && panel_ && (x >= panel_->width() || y >= panel_->height())) return false;
   ++edges_;
   if (down != last_reported_) {
     last_reported_ = down;
@@ -27,13 +27,14 @@ bool NSPanelTouchscreen::new_report(bool down, uint16_t x, uint16_t y) {
 }
 
 void NSPanelTouchscreen::update_touches() {
+  std::lock_guard<std::recursive_mutex> lock(panel_->transport_mutex());
   queue_.pop(current_);
   if (current_.down) add_raw_touch_position_(0, current_.x, current_.y);
   if (!queue_.empty()) store_.touched = true;
 }
 
 void NSPanelTouchscreen::dump_config() {
-  ESP_LOGCONFIG("nspanel_terminal", "NSPanel V92 protocol6 touchscreen, single pointer");
+  ESP_LOGCONFIG("nspanel_terminal", "NSPanel protocol6 touchscreen, single pointer");
 }
 
 }  // namespace esphome::nspanel_terminal

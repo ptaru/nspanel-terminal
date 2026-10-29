@@ -4,6 +4,6 @@ A TFT upload writes the display's firmware. Keep the panel powered through the t
 
 If the ESP32 is unreachable, try a power cycle and OTA; a failed ESP32 image may require serial flashing. The included TFT's display watchdog should return to the blank "waiting for connection" page after about 3 seconds of host silence. The NSPanel is mains-powered: disconnect power before opening it.
 
-If the blank page appears but the terminal does not start, check ESPHome logs for identity, UART or PSRAM errors. Verify the model and V92 firmware, ensure the component and TFT come from the same checkout, and call `enter_terminal`. An older host cannot stream to the live-brightness TFT; update the ESP32 host first.
+If the blank page appears but the terminal does not start, check ESPHome logs for identity, UART or PSRAM errors. Verify the model, native version and panel geometry: both modified images report native 92 (stock is 72). Use `width: 454`, `height: 320` for the EU panel or `width: 320`, `height: 480` for the US panel. Ensure the component and TFT come from the same checkout, and call `enter_terminal`. A host without live-brightness support cannot stream to the live-brightness TFT; update the ESP32 host first.
 
-To return to an earlier display UI, upload a compatible backed-up TFT. Merely replacing the file served at the URL does not change the installed display. There is no universal stock TFT in this repository.
+To restore a different display UI, upload a compatible backed-up TFT. Merely replacing the file served at the URL does not change the installed display. The `*-base.tft` files are the stock build inputs, not tested recovery images; keep your own dump of the panel before changing it.

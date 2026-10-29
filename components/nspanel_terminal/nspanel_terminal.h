@@ -2,6 +2,10 @@
 #include <array>
 #include <vector>
 #include <string>
+#include <mutex>
+#include <atomic>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "esphome/components/display/display_buffer.h"
 #include "esphome/components/uart/uart.h"
@@ -22,6 +26,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   float get_setup_priority() const override { return setup_priority::PROCESSOR; }
   display::DisplayType get_display_type() override { return display::DISPLAY_TYPE_COLOR; }
   void request_exit() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     exit_requested_ = true;
     stream_.request_exit();
   }
@@ -34,15 +39,27 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     brightness_selected_ = true;
   }
   void set_tft_url(const std::string &url) { tft_url_ = url; }
-  // Trial-only: stop all stream records without EXIT so the display watchdog runs.
+  void set_panel_size(uint16_t width, uint16_t height) {
+    width_ = width;
+    height_ = height;
+  }
+  uint16_t width() const { return width_; }
+  uint16_t height() const { return height_; }
+  // Diagnostic: stop all stream records without EXIT so the display watchdog runs.
   void request_abandon();
   void set_touchscreen(NSPanelTouchscreen *t) { touchscreen_ = t; }
-  // Trial instrumentation; off by default so production images stay quiet.
-  void set_diagnostics(bool enabled) { diagnostics_ = enabled; }
+  // Diagnostic instrumentation; off by default so production images stay quiet.
+  void set_diagnostics(bool enabled) { std::lock_guard<std::recursive_mutex> lock(mutex_); diagnostics_ = enabled; }
   bool diagnostics() const { return diagnostics_; }
   void request_full_redraw() {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
     if (buffer_) dirty_.all();
   }
+  void set_refresh_active(bool active) {
+    std::lock_guard<std::recursive_mutex> lock(mutex_);
+    refresh_active_ = active;
+  }
+  std::recursive_mutex &transport_mutex() { return mutex_; }
   unsigned completed_rectangles() const { return stream_.completed(); }
   uint32_t bytes_sent() const { return stream_.sent_bytes(); }
   unsigned heartbeats() const { return stream_.heartbeats(); }
@@ -58,8 +75,8 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void report_render_measurement();
 
  protected:
-  int get_width_internal() override { return 454; }
-  int get_height_internal() override { return 320; }
+  int get_width_internal() override { return width_; }
+  int get_height_internal() override { return height_; }
   void draw_absolute_pixel_internal(int, int, Color) override;
 
  private:
@@ -94,6 +111,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool read_terminated_();
   void drain_();
   bool change_baud_(uint32_t);
+  bool identity_ok_(const char *reply) const;
   void fail_(const char *);
   void finish_recovery_();
   void service_stream_();
@@ -111,11 +129,14 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   size_t rx_count_ = 0;
   std::vector<uint8_t> command_;
   size_t command_at_ = 0;
+  uint16_t width_ = 454, height_ = 320;
   DirtyRows dirty_;
   uint8_t *snapshot_ = nullptr;
   StreamEngine stream_;
   HighFrequencyLoopRequester high_frequency_;
   NSPanelTouchscreen *touchscreen_ = nullptr;
+  TouchQueue pending_touches_;
+  bool touch_reset_pending_ = false;
   bool diagnostics_ = false;
   unsigned resyncs_ = 0, faults_ = 0;
   uint32_t submit_ms_ = 0, last_loop_us_ = 0, max_gap_us_ = 0, abandon_deadline_ = 0;
@@ -138,5 +159,13 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   unsigned measurement_rectangles_ = 0, measurement_faults_ = 0, measurement_resyncs_ = 0;
   bool measurement_active_ = false;
   void trace_(uint8_t type, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0, uint16_t d = 0);
+  static void task_entry_(void *arg);
+  void task_loop_();
+  mutable std::recursive_mutex mutex_;
+  std::atomic<bool> task_stop_{false};
+  std::atomic<bool> task_running_{false};
+  TaskHandle_t task_ = nullptr;
+  bool refresh_active_ = false;
+  bool refresh_hooks_installed_ = false;
 };
 }  // namespace esphome::nspanel_terminal

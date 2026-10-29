@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Build the public NSPanel display TFT from the retained base and C source.
+"""Build a public NSPanel display TFT from a stock base and the C source.
 
 The native terminal is compiled as two freestanding Cortex-M0+ objects, placed
 at their fixed SRAM addresses, and patched into the documented regions of the
-base TFT. The builder also repairs every affected package checksum.
+selected base TFT. The builder also repairs every affected package checksum.
+
+Two profiles are supported:
+
+* ``eu`` - landscape 454x320 visible area inside a 480x320 controller.
+* ``us`` - portrait 320x480 visible area and controller.
 
 It deliberately does not upload anything. See docs/BUILDING.md.
 """
@@ -20,18 +25,13 @@ import sys
 import tempfile
 from pathlib import Path
 
+from panel_profiles import PROFILES
+
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "firmware" / "src"
-BASE = ROOT / "firmware" / "nspanel-v92-blank-base.tft"
-SHIPPED = ROOT / "firmware" / "nspanel-v92-blank.tft"
-DEFAULT_OUTPUT = ROOT / "build" / "nspanel-v92-blank.tft"
 
-BASE_SIZE = 264936
-BASE_SHA256 = "82434ab839ed14af45c655bdf1980848649c6a48081ee593c5cce397df7f3628"
-SHIPPED_SHA256 = "a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c"
-
-# Fixed addresses and package offsets for this V92 base. Do not change these
-# without changing the loader and the documented TFT layout.
+# Fixed addresses and package offsets shared by the EU and US stock exports. Do
+# not change these without changing the loader and the documented TFT layout.
 PROGRAM_BASE = 0x20000900
 PROGRAM_LIMIT = 0x200016F0
 LOADER_BASE = 0x200016F0
@@ -45,7 +45,11 @@ HELPER_SLOT = 844
 NATIVE_BUNDLE = 0x14532
 NATIVE_SIZE = 60352
 NATIVE_VERSION_OFFSET = 0xB8
-EXPECTED_NATIVE_VERSION = 92
+NATIVE_METADATA_START = 0xB4
+NATIVE_METADATA_END = 0xD3
+NATIVE_META_CRC_OFFSET = 0xB4
+NATIVE_META_BODY_CRC_OFFSET = 0xBE
+
 
 COMPILE_FLAGS = [
     "-target",
@@ -90,11 +94,23 @@ def find_compiler() -> str:
     return found
 
 
-def compile_object(cc: str, stem: str, output: Path, include: Path) -> None:
+def compile_object(
+    cc: str, stem: str, output: Path, include: Path, profile: Profile
+) -> None:
     source = SRC / f"{stem}.c"
     if not source.is_file():
         fail(f"source file is missing: {source}")
-    command = [cc, *COMPILE_FLAGS, "-I", str(include), "-c", str(source), "-o", str(output)]
+    command = [
+        cc,
+        *COMPILE_FLAGS,
+        *profile.defines,
+        "-I",
+        str(include),
+        "-c",
+        str(source),
+        "-o",
+        str(output),
+    ]
     result = subprocess.run(command, text=True, capture_output=True)
     if result.returncode:
         print("command:", " ".join(command), file=sys.stderr)
@@ -116,10 +132,67 @@ def assemble(elf_path: Path, base: int) -> tuple[bytes, dict[str, int]]:
 
 
 def native_start(tft: bytes) -> int:
-    tag, relative, size, _reserved, _reserved2 = struct.unpack_from("<HIIII", tft, NATIVE_BUNDLE + 16)
+    tag, relative, size, _reserved, _reserved2 = struct.unpack_from(
+        "<HIIII", tft, NATIVE_BUNDLE + 16
+    )
     if tag != 0xF130 or size != NATIVE_SIZE:
         fail(f"unexpected native record: tag={tag:#06x}, size={size}")
     return NATIVE_BUNDLE + relative
+
+
+def native_version(tft: bytes) -> int:
+    start = native_start(tft)
+    return struct.unpack_from("<H", tft, start + NATIVE_VERSION_OFFSET)[0]
+
+
+def patch_native_image(
+    tft: bytes, version: int, patches: tuple[tuple[int, bytes], ...]
+) -> bytes:
+    """Apply decoded native patches, set the version and repair metadata CRCs.
+
+    The native metadata at 0xB4..0xD2 is stored unencoded; the rest of the
+    native image is XOR-encoded with the key at 0xC2. The CRC at 0xBE covers
+    the encoded image outside the metadata block, and the CRC at 0xB4 covers
+    the metadata from 0xB8 through 0xD2. This is the same layout used by the
+    earlier EU version bumps.
+    """
+    from tft_crc import crc
+
+    start = native_start(tft)
+    raw = tft[start : start + NATIVE_SIZE]
+    key = raw[0xC2]
+    native = bytearray(
+        value
+        if NATIVE_METADATA_START <= offset < NATIVE_METADATA_END
+        else value ^ key
+        for offset, value in enumerate(raw)
+    )
+    for offset, data in patches:
+        if offset < NATIVE_METADATA_END or offset + len(data) > NATIVE_SIZE:
+            fail(f"invalid native patch range: {offset:#x}+{len(data)}")
+        native[offset : offset + len(data)] = data
+    struct.pack_into("<H", native, NATIVE_VERSION_OFFSET, version)
+    encoded = bytearray(
+        value
+        if NATIVE_METADATA_START <= offset < NATIVE_METADATA_END
+        else value ^ key
+        for offset, value in enumerate(native)
+    )
+    struct.pack_into(
+        "<I",
+        encoded,
+        NATIVE_META_BODY_CRC_OFFSET,
+        crc(encoded[:NATIVE_METADATA_START] + encoded[NATIVE_METADATA_END:]),
+    )
+    struct.pack_into(
+        "<I",
+        encoded,
+        NATIVE_META_CRC_OFFSET,
+        crc(encoded[NATIVE_VERSION_OFFSET:NATIVE_METADATA_END]),
+    )
+    out = bytearray(tft)
+    out[start : start + NATIVE_SIZE] = encoded
+    return bytes(out)
 
 
 def patch_package(base: bytes, program: bytes, loader: bytes) -> bytes:
@@ -145,21 +218,36 @@ def patch_package(base: bytes, program: bytes, loader: bytes) -> bytes:
     # affected package checksums keeps the output verifiable by verify_tft.py.
     struct.pack_into("<I", out, 0x44, crc(out[0x10000:0x40000]))
     struct.pack_into("<I", out, 0xC4, crc(out[:0xC4]))
-    struct.pack_into("<I", out, len(out) - 4, crc(out[:-4]) ^ out[3] ^ out[0x2E] ^ out[0x3C])
+    struct.pack_into(
+        "<I", out, len(out) - 4, crc(out[:-4]) ^ out[3] ^ out[0x2E] ^ out[0x3C]
+    )
     return bytes(out)
 
 
-def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
+def build(
+    base: bytes, work: Path, cc: str, profile: Profile
+) -> tuple[bytes, dict[str, object]]:
     from tft_crc import crc
 
-    if len(base) != BASE_SIZE:
-        fail(f"base TFT is {len(base)} bytes, expected {BASE_SIZE}")
+    if len(base) != profile.base_size:
+        fail(f"base TFT is {len(base)} bytes, expected {profile.base_size}")
     base_hash = sha256(base)
-    if base_hash != BASE_SHA256:
+    if base_hash != profile.base_sha256:
         fail(
-            f"base TFT SHA-256 is {base_hash}, expected {BASE_SHA256}. "
-            "This source is tied to the documented V92 base."
+            f"base TFT SHA-256 is {base_hash}, expected {profile.base_sha256}. "
+            f"This source is tied to the documented {profile.name.upper()} base."
         )
+    base_version = native_version(base)
+    if base_version != profile.base_native_version:
+        fail(
+            f"base TFT reports native version {base_version}, expected "
+            f"{profile.base_native_version}"
+        )
+    working = (
+        base
+        if base_version == profile.native_version and not profile.native_patches
+        else patch_native_image(base, profile.native_version, profile.native_patches)
+    )
 
     program_obj = work / "terminal_receiver.o"
     loader_obj = work / "terminal_loader.o"
@@ -172,7 +260,7 @@ def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
             "header and can make the loader disagree with the program"
         )
 
-    compile_object(cc, "terminal_receiver", program_obj, work)
+    compile_object(cc, "terminal_receiver", program_obj, work, profile)
     program, symbols = assemble(program_obj, PROGRAM_BASE)
     if len(program) > PROGRAM_LIMIT - PROGRAM_BASE:
         fail(
@@ -189,17 +277,43 @@ def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
         f"#define POOL_ENTRY 0x{PROGRAM_BASE + 1:08x}u\n"
     )
 
-    compile_object(cc, "terminal_loader", loader_obj, work)
+    compile_object(cc, "terminal_loader", loader_obj, work, profile)
     loader, _ = assemble(loader_obj, LOADER_BASE)
     if len(loader) > LOADER_LIMIT:
         fail(f"helper-0 loader is {len(loader)} bytes; the slot allows {LOADER_LIMIT}")
 
-    candidate = patch_package(base, program, loader)
+    candidate = patch_package(working, program, loader)
     start = native_start(candidate)
-    if struct.unpack_from("<H", candidate, start + NATIVE_VERSION_OFFSET)[0] != EXPECTED_NATIVE_VERSION:
-        fail("patched package does not report native version 92")
-    if candidate[0x14566 : 0x14566 + NATIVE_SIZE] != base[0x14566 : 0x14566 + NATIVE_SIZE]:
-        fail("native F130 image changed; this builder should only replace RAM code")
+    version = native_version(candidate)
+    if version != profile.native_version:
+        fail(
+            f"patched package reports native version {version}, expected "
+            f"{profile.native_version}"
+        )
+
+    native_allowed: set[int] = set()
+    for offset, data in profile.native_patches:
+        native_allowed |= set(range(offset, offset + len(data)))
+    if base_version != profile.native_version:
+        native_allowed |= set(
+            range(NATIVE_VERSION_OFFSET, NATIVE_VERSION_OFFSET + 2)
+        )
+        native_allowed |= set(
+            range(NATIVE_META_CRC_OFFSET, NATIVE_META_CRC_OFFSET + 4)
+        )
+        native_allowed |= set(
+            range(NATIVE_META_BODY_CRC_OFFSET, NATIVE_META_BODY_CRC_OFFSET + 4)
+        )
+    native_changed = {
+        offset
+        for offset, (before, after) in enumerate(
+            zip(base[start : start + NATIVE_SIZE], candidate[start : start + NATIVE_SIZE])
+        )
+        if before != after
+    }
+    if not native_changed <= native_allowed:
+        outside = sorted(native_changed - native_allowed)[:8]
+        fail(f"unexpected native image change outside the version metadata: {outside}")
 
     # Fail closed on any byte outside the documented patch regions. This keeps
     # the UI assets, native image, other helpers and updater byte-identical.
@@ -210,13 +324,25 @@ def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
     allowed |= set(range(HELPER_BUNDLE, HELPER_BUNDLE + 4))
     allowed |= set(range(entry, entry + 4)) | set(range(entry + 8, entry + 12))
     allowed |= set(range(helper_start, helper_start + HELPER_SLOT))
+    allowed |= {start + offset for offset in native_allowed}
     allowed |= set(range(len(base) - 4, len(base)))
-    changed = {i for i, (before, after) in enumerate(zip(base, candidate)) if before != after}
+    changed = {
+        i for i, (before, after) in enumerate(zip(base, candidate)) if before != after
+    }
     if not changed <= allowed:
         outside = sorted(changed - allowed)[:8]
         fail(f"unexpected package change outside the patch regions: {outside}")
 
     report: dict[str, object] = {
+        "panel": profile.name,
+        "panel_width": profile.panel_width,
+        "panel_height": profile.panel_height,
+        "entry_width": profile.entry_width,
+        "entry_height": profile.entry_height,
+        "entry_state": profile.entry_state,
+        "base_native_version": profile.base_native_version,
+        "native_version": profile.native_version,
+        "native_patches": len(profile.native_patches),
         "base_sha256": base_hash,
         "program_bytes": len(program),
         "program_limit": PROGRAM_LIMIT - PROGRAM_BASE,
@@ -232,66 +358,80 @@ def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
+        "--panel",
+        choices=sorted(PROFILES),
+        default="eu",
+        help="panel profile to build (default: eu)",
+    )
+    parser.add_argument(
         "--base",
         type=Path,
-        default=BASE,
-        help="V92 base TFT (default: firmware/nspanel-v92-blank-base.tft)",
+        help="override the profile's base TFT (the profile checksum still applies)",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=DEFAULT_OUTPUT,
-        help="output TFT (default: build/nspanel-v92-blank.tft)",
+        help="output TFT (default: the profile's build/ path)",
     )
     parser.add_argument(
         "--check",
         action="store_true",
-        help="require a byte-for-byte match with firmware/nspanel-v92-blank.tft",
+        help="require a byte-for-byte match with the profile's shipped TFT",
     )
     parser.add_argument("--cc", help="clang to use (default: $CC or clang on PATH)")
     parser.add_argument("--json", action="store_true", help="print a JSON build report")
     args = parser.parse_args()
 
-    if not args.base.is_file():
-        fail(f"base TFT not found: {args.base}")
-    output = args.output.resolve()
-    for protected in (BASE, SHIPPED):
+    profile = PROFILES[args.panel]
+    base_path = args.base or profile.base
+    output_arg = args.output or profile.output
+    if not base_path.is_file():
+        fail(f"base TFT not found: {base_path}")
+    output = output_arg.resolve()
+    for protected in (profile.base, profile.shipped):
         if output == protected.resolve():
-            fail(f"refusing to overwrite the checked-in TFT: {args.output}")
-    base = args.base.read_bytes()
+            fail(f"refusing to overwrite the checked-in TFT: {output_arg}")
+    base = base_path.read_bytes()
     cc = args.cc or find_compiler()
 
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".build-", dir=args.output.parent) as temp:
-        candidate, report = build(base, Path(temp), cc)
+    output_arg.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".build-", dir=output_arg.parent) as temp:
+        candidate, report = build(base, Path(temp), cc, profile)
 
     if args.check:
-        shipped = SHIPPED.read_bytes()
-        if candidate != shipped:
+        tried = []
+        for shipped_path in dict.fromkeys((profile.shipped, output_arg)):
+            if shipped_path.is_file():
+                tried.append(shipped_path)
+        if not tried:
+            fail(f"no shipped {profile.name.upper()} TFT to compare against")
+        shipped_path = tried[0]
+        if candidate != shipped_path.read_bytes():
             fail(
-                "build does not match firmware/nspanel-v92-blank.tft. "
+                f"build does not match {shipped_path.relative_to(ROOT)}. "
                 "A different compiler version or a source change can cause this; "
                 "see docs/BUILDING.md."
             )
-        report["check"] = "matches firmware/nspanel-v92-blank.tft"
+        report["check"] = str(shipped_path.relative_to(ROOT))
 
-    tmp = args.output.with_name(args.output.name + ".tmp")
+    tmp = output_arg.with_name(output_arg.name + ".tmp")
     tmp.write_bytes(candidate)
-    tmp.replace(args.output)
-    report["output"] = str(args.output)
+    tmp.replace(output_arg)
+    report["output"] = str(output_arg)
     report["output_sha256"] = sha256(candidate)
 
     if args.json:
         print(json.dumps(report, indent=2))
         return
-    print(f"wrote {args.output}")
+    print(f"wrote {output_arg}")
+    print(f"  panel   : {profile.name} ({profile.panel_width}x{profile.panel_height})")
     print(f"  SHA-256 : {report['output_sha256']}")
     print(f"  program : {report['program_bytes']} / {report['program_limit']} bytes")
     print(f"  loader  : {report['loader_bytes']} / {report['loader_limit']} bytes")
     print(f"  changed : {report['changed_bytes']} bytes")
     if args.check:
-        print("  check   : byte-for-byte match with the shipped TFT")
-    elif report["output_sha256"] == SHIPPED_SHA256:
+        print(f"  check   : byte-for-byte match with {report['check']}")
+    elif report["output_sha256"] == profile.shipped_sha256:
         print("  note    : output matches the shipped TFT")
 
 

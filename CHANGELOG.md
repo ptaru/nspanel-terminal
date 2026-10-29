@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.0 — 2026-10-29
+
+- Add US portrait support: `terminal-us.tft` and `base-us.tft` for the 320×480 panel, alongside the EU `terminal-eu.tft` and `base-eu.tft`.
+- Build both images from unmodified stock 72 blank exports. The EU profile applies seven earlier EU native patches; the US profile uses the stock US native code. Both shipped images report native revision 92.
+- Add `width`/`height` display configuration and make the framebuffer, dirty-tile tracker, touch bounds and protocol engine use the configured panel size.
+- Require native revision 92 in the component; panel geometry remains selected by `width`/`height` and checked by the display loader.
+- Add EU and US build/verify profiles and coherent TFT names.
+- Run UART streaming, heartbeats and reply processing in a dedicated ESP32 task so blocking UI work does not interrupt the terminal session.
+- Pass touch samples back to the ESPHome main loop before updating the touchscreen.
+- Hold new UART snapshots until LVGL reports that its refresh cycle has finished.
+- Remove the separate installer example. The panel firmware installs the first TFT and later updates through its `upload_tft` action.
+
 ## 0.2.0 — 2026-10-29
 
 - Ship the hardware-tested blank V92 TFT with live brightness and a fixed 3-second host-inactivity watchdog.
@@ -15,7 +27,7 @@
 ## 0.1.0 — 2026-10-29
 
 - Public packaging of the prebuilt custom native display firmware and the ESPHome display/touchscreen component.
-- Blank-UI TFT (`nspanel-v92-blank.tft`) built from a compatible Nextion
+- Blank-UI TFT (`terminal-eu.tft`) built from a compatible Nextion
   Editor 1.65.1 export and patched to native V92.
 - Installer and graphical ESPHome examples.
 - Install, compatibility, recovery, safety, protocol and troubleshooting docs.

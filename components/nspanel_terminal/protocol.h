@@ -208,7 +208,6 @@ inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_
   out[mark] = uint8_t(code);
   out.push_back(0);
 }
-constexpr int WIDTH = 454, HEIGHT = 320;
 constexpr unsigned RESPONSE = 32;
 struct Reply {
   unsigned status = 0, seq = 0, rectangles = 0, flags = 0, mask = 0, freshness = 0, x = 0, y = 0, highwater = 0;

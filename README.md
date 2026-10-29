@@ -1,41 +1,111 @@
 # NSPanel terminal
 
-Use an EU Sonoff NSPanel as an ESPHome display and touchscreen. The ESP32 streams RGB565 rectangles to the display's STM over UART; the included TFT provides the terminal and a blank fallback page. This project is experimental and targets the **EU NSPanel** (`NX4832F035_011C`, MCU code F130), not the US panel or NSPanel Pro.
+Turn an EU or US Sonoff NSPanel into a general-purpose ESPHome display and
+touchscreen. ESPHome draws the interface on the ESP32 and sends it to the
+panel's screen over the internal serial link. The supplied display image
+replaces the Sonoff interface with a blank "waiting for connection" page, which
+is shown when the terminal is not running. This project is experimental and
+targets the NSPanel display `NX4832F035_011C` (MCU code F130), not NSPanel Pro.
 
-Version **0.2.0** includes a V92/protocol 6 TFT with live brightness and a fixed 3-second host-inactivity watchdog. Its SHA-256 is `a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c`. The TFT was uploaded and reconnected on one EU panel. The component supports ESPHome 2026.10.x, PSRAM, a 454×320 visible area and single-pointer touch.
+| Panel | Orientation | Screen size | Firmware version | Image to install | SHA-256 |
+| --- | --- | --- | ---: | --- | --- |
+| EU | landscape | 454×320 in a 480×320 controller | 92 | `firmware/terminal-eu.tft` | `a25aafc2…8a3d10c` |
+| US | portrait | 320×480 | 92 | `firmware/terminal-us.tft` | `512aa5bc…b1d74e` |
 
-The native display firmware source is included in [`firmware/src/`](firmware/src/) and builds the shipped TFT from the retained V92 base. See [display firmware internals](docs/FIRMWARE.md) for the memory map, protocol receiver, brightness, watchdog and safety limits, and [building](docs/BUILDING.md) for the toolchain and commands.
+Both modified images report native revision 92. Both retained bases are
+unmodified 72 exports (the EU Editor export and the stock US export); the EU
+build applies the earlier EU native patches, while the US build leaves the
+stock US native code alone. Panel geometry is
+selected by `width`/`height` and checked by the display loader, not inferred
+from the version.
+
+Both images replace the stock Sonoff interface and let ESPHome control the
+screen and receive touch input. Brightness changes take effect while the UI is
+running. If ESPHome stops sending data, the panel returns to its blank fallback
+page after about three seconds, so a crashed or disconnected host does not leave
+the screen frozen.
+
+The EU image has been tested on a real EU panel. The US image is built from the
+stock US image and validated offline (package structure, checksums and receiver
+emulation); it has not been run on US hardware yet. Treat it as experimental and
+keep the original US image for rollback.
+
+The display firmware source is included in [`firmware/src/`](firmware/src/) and
+builds both images from the original Sonoff images. See
+[display firmware internals](docs/FIRMWARE.md) for the implementation and
+[building](docs/BUILDING.md) for the toolchain and commands.
 
 ## Install
 
 1. Back up the panel's existing TFT and ESP32 configuration. Keep power stable during display updates; a failed transfer can require recovery.
-2. Copy `examples/secrets.yaml.example` to `examples/secrets.yaml` and fill in your credentials and `tft_url`. Serve `firmware/nspanel-v92-blank.tft` over HTTP from a server that supports `HEAD` and byte-range requests. For example, Home Assistant's `/local/` file service can host it.
+2. Copy `examples/secrets.yaml.example` to `examples/secrets.yaml` and fill in your credentials and `tft_url`. Serve the TFT for your panel over HTTP from a server that supports `HEAD` and byte-range requests. For example, Home Assistant's `/local/` file service can host it.
 3. Verify the file:
 
    ```sh
-   python3 tools/verify_tft.py firmware/nspanel-v92-blank.tft
+   # EU
+   python3 tools/verify_tft.py firmware/terminal-eu.tft
+   # US
+   python3 tools/verify_tft.py --panel us firmware/terminal-us.tft
    ```
 
-4. For the first installation, flash `examples/installer.yaml` and call its `upload_tft` API action. Wait for completion and the display restart.
-5. Flash `examples/panel.yaml`. It loads the component from this checkout. Verify that the ESPHome UI renders and touch works.
+4. Flash `examples/panel.yaml` for the EU panel or `examples/panel-us.yaml` for the US panel — USB serial for the first installation, or OTA if the current firmware is reachable. Both load the component from this checkout and expose `upload_tft`.
+5. Call `upload_tft`. The component stops the terminal, installs the TFT from `tft_url`, and restarts the display. Wait for completion, then verify that the ESPHome UI renders and touch works.
 
-The sample configuration uses the EU NSPanel GPIO pins and PSRAM wiring. Review it before installing, especially if your board differs. Use the TFT and component from the same checkout: the live-brightness TFT advertises a capability older component versions do not recognize. The `v0.1.0` tag predates these changes; use the `v0.2.0` tag or the current checkout.
+The sample configurations use the NSPanel GPIO pins and PSRAM wiring. Review them
+before installing, especially if your board differs. Use the TFT and component
+from the same checkout, and select the matching panel geometry:
+
+```yaml
+display:
+  - platform: nspanel_terminal
+    # EU landscape (default)
+    width: 454
+    height: 320
+
+  # US portrait
+  # width: 320
+  # height: 480
+```
+
+Only `454x320` and `320x480` are accepted. The component rejects the wrong
+native identity rather than streaming into a mismatched framebuffer.
 
 ## Operate
 
-The example exposes ESPHome API actions `exit_terminal`, `enter_terminal`, `upload_tft` and `set_brightness`. Set `percent` to an integer from 0 to 100. The shipped TFT applies brightness between streamed rectangles and acknowledges it without leaving the terminal. `brightness` under the display sets the initial level at boot.
+The examples expose ESPHome API actions `exit_terminal`, `enter_terminal`,
+`upload_tft` and `set_brightness`. Set `percent` to an integer from 0 to 100.
+The TFT applies brightness between streamed rectangles and acknowledges it
+without leaving the terminal. `brightness` under the display sets the initial
+level at boot.
 
-For subsequent TFT updates, serve the verified TFT at the configured URL and call `upload_tft` from the panel firmware. The component owns the display UART; do not configure a separate Nextion component on that UART at the same time. If the host stops transmitting, the display watchdog returns to the blank page. The blank TFT does not contain the original Sonoff UI.
+For later TFT updates, serve the verified TFT at the configured URL and call
+`upload_tft` from the panel firmware. The component owns the display UART; do
+not configure a separate Nextion component on that UART at the same time. If the
+host stops transmitting, the display watchdog returns to the blank page. The
+blank TFT does not contain the Sonoff UI.
 
 ## Build from source
 
-The display build is offline and needs only Python and a clang with the ARM backend, not ESPHome:
+The display build is offline and needs only Python and a clang with the ARM
+backend, not ESPHome:
 
 ```sh
-python3 tools/build_tft.py --check
-python3 tools/verify_tft.py build/nspanel-v92-blank.tft
+python3 tools/build_tft.py --panel eu --check
+python3 tools/verify_tft.py build/terminal-eu.tft
+
+python3 tools/build_tft.py --panel us --check
+python3 tools/verify_tft.py --panel us build/terminal-us.tft
 ```
 
-Or run `make verify`. `--check` reproduces the official TFT byte-for-byte. For a modified build, omit `--check` and verify with `tools/verify_tft.py --allow-modified build/nspanel-v92-blank.tft`. The builder never uploads. See [building](docs/BUILDING.md) and the [source map](firmware/src/).
+Or run `make verify`, which checks both profiles. `--check` reproduces the
+shipped TFT byte-for-byte. For a modified build, omit `--check` and verify with
+`tools/verify_tft.py --allow-modified` (add `--panel us` for the US image). The
+builder never uploads. See [building](docs/BUILDING.md) and the
+[source map](firmware/src/).
 
-See [firmware internals](docs/FIRMWARE.md), [protocol](docs/PROTOCOL.md), [recovery](docs/RECOVERY.md), [component configuration](components/nspanel_terminal/README.md), [examples](examples/README.md), and [contributing](CONTRIBUTING.md). The TFT contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see [LICENSE](LICENSE).
+See [firmware internals](docs/FIRMWARE.md), [protocol](docs/PROTOCOL.md),
+[recovery](docs/RECOVERY.md),
+[component configuration](components/nspanel_terminal/README.md),
+[examples](examples/README.md), and [contributing](CONTRIBUTING.md). The TFT
+contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see
+[LICENSE](LICENSE).

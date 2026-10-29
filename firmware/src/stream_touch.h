@@ -6,9 +6,9 @@
  * pins as open-drain outputs, so this code only changes the output latch
  * through BSRR/BRR. It does not reconfigure GPIO mode, clocks or pull-ups.
  *
- * The delay is a bounded, conservative number of NOPs. It was retained from
- * the hardware-tested V89 path; it is not a calibrated I2C timing guarantee.
- * See docs/FIRMWARE.md for the touch data path and its limits.
+ * The delay is a bounded, conservative number of NOPs; it is not a calibrated
+ * I2C timing guarantee. See docs/FIRMWARE.md for the touch data path and its
+ * limits.
  */
 #define G 0x50000400u /* GPIOB */
 

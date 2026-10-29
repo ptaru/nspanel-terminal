@@ -6,11 +6,13 @@ ITEAD/Nextion.
 Sonoff and NSPanel are trademarks of their respective owners. Nextion is a
 trademark of ITEAD.
 
-`firmware/nspanel-v92-blank.tft` and `firmware/nspanel-v92-blank-base.tft`
+`firmware/terminal-eu.tft`, `firmware/base-eu.tft`,
+`firmware/terminal-us.tft` and `firmware/base-us.tft`
 contain the Nextion display runtime and the NSPanel display configuration.
-They are provided for use with genuine NSPanel hardware only. The TFT is a
-modified build of the blank UI exported with Nextion Editor 1.65.1, patched with
-the V92 terminal loader. No personal or site-specific UI content is included.
+They are provided for use with genuine NSPanel hardware only. The EU TFT is a
+modified build of the blank UI exported with Nextion Editor 1.65.1; the US TFT
+is a modified build of the stock US blank export. Both are patched with the
+NSPanel terminal loader. No personal or site-specific UI content is included.
 
 The native display source in `firmware/src/` is original project code and is
 provided under the repository's MIT license. It calls fixed routines in the

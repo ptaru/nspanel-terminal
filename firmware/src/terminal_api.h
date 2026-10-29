@@ -2,7 +2,7 @@
 /*
  * Shared hardware interfaces for the NSPanel display terminal.
  *
- * Target: the STM32-class display MCU in the EU Sonoff NSPanel
+ * Target: the STM32-class display MCU in the EU and US Sonoff NSPanel
  * (NX4832F035_011C, MCU code F130). Addresses are fixed by the stock
  * Nextion runtime and are not portable to another panel or display model.
  *
@@ -12,6 +12,8 @@
  */
 #pragma once
 #include <stdint.h>
+
+#include "panel_profile.h"
 
 /* One Goodix contact report. The stock path supports at most five contacts;
  * this terminal publishes the first one and uses the mask/fresh flags to tell

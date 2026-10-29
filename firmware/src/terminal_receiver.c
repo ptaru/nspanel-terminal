@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * V92 protocol-6 terminal receiver with live brightness.
+ * NSPanel protocol-6 terminal receiver with live brightness.
  *
  * This is the RAM overlay that runs while the stock Nextion UI is suspended.
  * It is copied by terminal_loader.c to 0x20000900 and entered at
@@ -22,7 +22,7 @@
 #include "stream_touch.h"
 
 /* Configure the LCD window with the stock ROM routine. Coordinates are
- * inclusive; the stock routine handles the 454x320 visible area. */
+ * inclusive; the stock routine handles the profile's visible area. */
 static void stream_window(unsigned x, unsigned y, unsigned w, unsigned h) {
   ((void (*)(uint32_t, uint32_t, uint32_t, uint32_t))0x08007f71)(
       x, y, x + w - 1, y + h - 1);

@@ -12,14 +12,17 @@ class StreamEngine {
     const uint8_t *data;
     uint16_t operator()(unsigned i) const { return protocol::get16(data + 2 * i); }
   };
-  void begin(unsigned session, uint32_t now) {
+  void begin(unsigned session, uint32_t now, unsigned width, unsigned height) {
     *this = StreamEngine();
     session_ = session;
+    width_ = width;
+    height_ = height;
     stage_ = Stage::READY;
     last_report_ = last_wire_ = now;
   }
   bool submit(unsigned x, unsigned y, unsigned w, unsigned h, const uint8_t *snapshot, uint32_t now) {
-    if (stage_ != Stage::IDLE || !snapshot || !w || !h || x >= 454 || y >= 320 || w > 454 - x || h > 320 - y)
+    if (stage_ != Stage::IDLE || !snapshot || !w || !h || x >= width_ || y >= height_ || w > width_ - x ||
+        h > height_ - y)
       return false;
     x_ = x;
     y_ = y;
@@ -191,6 +194,7 @@ class StreamEngine {
  private:
   Stage stage_ = Stage::STOPPED;
   unsigned session_ = 0, seq_ = 0, x_ = 0, y_ = 0, w_ = 0, h_ = 0, retries_ = 0, mask_ = 0, heartbeats_ = 0;
+  unsigned width_ = 454, height_ = 320;
   uint16_t completed_ = 0;
   uint32_t sent_ = 0, consumed_ = 0, last_wire_ = 0, last_report_ = 0;
   bool exit_ = false;
@@ -206,44 +210,59 @@ class StreamEngine {
 };
 
 // Dirty rows are claimed/cleared at snapshot time, never at DONE. Subsequent
-// rendering therefore remains dirty even when an older snapshot completes.
+// rendering therefore remains dirty even when a superseded snapshot completes.
 struct DirtyRows {
-  // 57 columns cover 454 pixels. Separate runs on one row remain separate.
+  // Eight-pixel tiles keep a row change compact. The EU panel uses 57 columns
+  // for 454 pixels; the US panel uses 40 for 320. Both fit in one uint64_t.
   static constexpr unsigned TILE = 8;
-  static constexpr unsigned COLUMNS = 57;
-  static constexpr uint64_t FULL = (uint64_t(1) << COLUMNS) - 1;
-  std::array<uint64_t, 320> rows{};
+  static constexpr unsigned MAX_COLUMNS = 64;
+  static constexpr unsigned MAX_ROWS = 480;
+  std::array<uint64_t, MAX_ROWS> rows{};
   unsigned next = 0;
+  unsigned width = 454, height = 320, columns = 57;
+  uint64_t full = (uint64_t(1) << 57) - 1;
+
+  void set_dimensions(unsigned panel_width, unsigned panel_height) {
+    width = panel_width;
+    height = std::min(panel_height, MAX_ROWS);
+    columns = (width + TILE - 1) / TILE;
+    if (columns == 0) columns = 1;
+    if (columns > MAX_COLUMNS) columns = MAX_COLUMNS;
+    full = columns == 64 ? ~uint64_t(0) : ((uint64_t(1) << columns) - 1);
+    next = 0;
+    rows.fill(0);
+  }
   void mark(unsigned x, unsigned y, unsigned w = 1) {
-    if (!w || x >= 454 || y >= 320) return;
+    if (!w || x >= width || y >= height) return;
     const unsigned first = x / TILE;
-    const unsigned last = (std::min<unsigned>(454, x + w) - 1) / TILE;
-    rows[y] |= (FULL >> (COLUMNS - (last - first + 1))) << first;
+    const unsigned last = (std::min<unsigned>(width, x + w) - 1) / TILE;
+    rows[y] |= (full >> (columns - (last - first + 1))) << first;
   }
   void all() {
     next = 0;
-    rows.fill(FULL);
+    rows.fill(0);
+    for (unsigned y = 0; y < height; ++y) rows[y] = full;
   }
   bool take(unsigned &x, unsigned &y, unsigned &w, unsigned &h) {
     unsigned scanned = 0;
-    while (scanned < 320 && rows[(next + scanned) % 320] == 0) ++scanned;
-    if (scanned == 320) return false;
-    y = (next + scanned) % 320;
+    while (scanned < height && rows[(next + scanned) % height] == 0) ++scanned;
+    if (scanned == height) return false;
+    y = (next + scanned) % height;
     const unsigned first = __builtin_ctzll(rows[y]);
     unsigned last = first;
-    while (last + 1 < COLUMNS && (rows[y] & (uint64_t(1) << (last + 1)))) ++last;
-    const uint64_t mask = (FULL >> (COLUMNS - (last - first + 1))) << first;
+    while (last + 1 < columns && (rows[y] & (uint64_t(1) << (last + 1)))) ++last;
+    const uint64_t mask = (full >> (columns - (last - first + 1))) << first;
     x = first * TILE;
-    const unsigned right = std::min<unsigned>(454, (last + 1) * TILE);
+    const unsigned right = std::min<unsigned>(width, (last + 1) * TILE);
     w = right - x;
     h = 1;
     rows[y] &= ~mask;
     // Consume only matching columns. Other runs in those rows stay queued.
-    while (h < 16 && y + h < 320 && (rows[y + h] & mask)) {
+    while (h < 16 && y + h < height && (rows[y + h] & mask)) {
       rows[y + h] &= ~mask;
       ++h;
     }
-    next = (y + (rows[y] ? 0 : h)) % 320;
+    next = (y + (rows[y] ? 0 : h)) % height;
     return true;
   }
 };
