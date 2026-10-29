@@ -254,7 +254,7 @@ If no input bytes arrive for 3,000 ms, the receiver reports an error with flag
 `0x2000`, restores the stock runtime and returns to the blank page. The 3-second
 value replaced an earlier 300 ms watchdog so ordinary host scheduling pauses do
 not tear down a healthy session. It is a fixed constant in
-`terminal_brightness.c`; changing it requires a rebuild and a new TFT.
+`terminal_receiver.c`; changing it requires a rebuild and a new TFT.
 
 The watchdog covers host silence, not a hung display or a failed ESP32 image.
 A display that stays black after a crash is a recovery case; see
@@ -312,10 +312,10 @@ Different clang versions can produce different (but structurally valid) code;
 | File | Role |
 | --- | --- |
 | [`terminal_api.h`](../firmware/src/terminal_api.h) | Register addresses, stock entry points, touch report structure. |
-| [`terminal_brightness.c`](../firmware/src/terminal_brightness.c) | Main receiver, entry/exit, reports, watchdog. |
-| [`stream_brightness.h`](../firmware/src/stream_brightness.h) | Protocol-6 decoder, PackBits, brightness record. |
+| [`terminal_receiver.c`](../firmware/src/terminal_receiver.c) | Main receiver, entry/exit, reports, watchdog. |
+| [`stream_protocol.h`](../firmware/src/stream_protocol.h) | Protocol-6 decoder, PackBits, brightness record. |
 | [`stream_touch.h`](../firmware/src/stream_touch.h) | Goodix bit-banged I2C and polling. |
-| [`terminal_brightness_loader.c`](../firmware/src/terminal_brightness_loader.c) | Helper-0 loader and restoration. |
+| [`terminal_loader.c`](../firmware/src/terminal_loader.c) | Helper-0 loader and restoration. |
 | [`tools/build_tft.py`](../tools/build_tft.py) | Compiler, fixed-address assembler and TFT patcher. |
 | [`tools/verify_tft.py`](../tools/verify_tft.py) | Structural verifier. |
 

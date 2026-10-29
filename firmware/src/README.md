@@ -8,12 +8,12 @@ inside the display's helper overlay. It is the source for
 | File | Purpose |
 | --- | --- |
 | `terminal_api.h` | Fixed USART/DMA/GPIO addresses, the stock baud setter and the touch-report structure. |
-| `terminal_brightness.c` | Entry point, UART/DMA setup, stream loop, touch scheduling, reverse reports, watchdog and exit restoration. |
-| `stream_brightness.h` | Protocol-6 COBS/PackBits decoder, header validation and the live-brightness record. |
+| `terminal_receiver.c` | Entry point, UART/DMA setup, stream loop, touch scheduling, reverse reports, watchdog and exit restoration. |
+| `stream_protocol.h` | Protocol-6 COBS/PackBits decoder, header validation and the live-brightness record. |
 | `stream_touch.h` | GPIO bit-banged I2C and Goodix polling. |
-| `terminal_brightness_loader.c` | Helper-0 loader: copy, CRC check, call the overlay, restore the stock runtime. |
+| `terminal_loader.c` | Helper-0 loader: copy, CRC check, call the overlay, restore the stock runtime. |
 
-`terminal_brightness_meta.h` is generated at build time by `tools/build_tft.py`;
+`terminal_receiver_meta.h` is generated at build time by `tools/build_tft.py`;
 it contains the program size, CRC and Thumb entry address. It is not checked in
 because it must match the compiled program exactly.
 

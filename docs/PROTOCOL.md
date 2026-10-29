@@ -2,7 +2,7 @@
 
 This is the wire format between the ESP32 host component and the V92 display
 terminal. It is implemented by
-[`firmware/src/stream_brightness.h`](../firmware/src/stream_brightness.h) and
+[`firmware/src/stream_protocol.h`](../firmware/src/stream_protocol.h) and
 [`components/nspanel_terminal/`](../components/nspanel_terminal/). See
 [display firmware internals](FIRMWARE.md) for the display-side memory and entry
 contract.

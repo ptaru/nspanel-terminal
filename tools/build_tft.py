@@ -161,18 +161,18 @@ def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
             "This source is tied to the documented V92 base."
         )
 
-    program_obj = work / "terminal_brightness.o"
-    loader_obj = work / "terminal_brightness_loader.o"
-    meta = work / "terminal_brightness_meta.h"
+    program_obj = work / "terminal_receiver.o"
+    loader_obj = work / "terminal_loader.o"
+    meta = work / "terminal_receiver_meta.h"
 
-    stale_meta = SRC / "terminal_brightness_meta.h"
+    stale_meta = SRC / "terminal_receiver_meta.h"
     if stale_meta.exists():
         fail(
             f"remove the stale {stale_meta}: it would override the generated "
             "header and can make the loader disagree with the program"
         )
 
-    compile_object(cc, "terminal_brightness", program_obj, work)
+    compile_object(cc, "terminal_receiver", program_obj, work)
     program, symbols = assemble(program_obj, PROGRAM_BASE)
     if len(program) > PROGRAM_LIMIT - PROGRAM_BASE:
         fail(
@@ -189,7 +189,7 @@ def build(base: bytes, work: Path, cc: str) -> tuple[bytes, dict[str, object]]:
         f"#define POOL_ENTRY 0x{PROGRAM_BASE + 1:08x}u\n"
     )
 
-    compile_object(cc, "terminal_brightness_loader", loader_obj, work)
+    compile_object(cc, "terminal_loader", loader_obj, work)
     loader, _ = assemble(loader_obj, LOADER_BASE)
     if len(loader) > LOADER_LIMIT:
         fail(f"helper-0 loader is {len(loader)} bytes; the slot allows {LOADER_LIMIT}")

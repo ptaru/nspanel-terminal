@@ -3,7 +3,7 @@
  * V92 protocol-6 terminal receiver with live brightness.
  *
  * This is the RAM overlay that runs while the stock Nextion UI is suspended.
- * It is copied by terminal_brightness_loader.c to 0x20000900 and entered at
+ * It is copied by terminal_loader.c to 0x20000900 and entered at
  * 0x20000901 (Thumb). It borrows the stock USART1, DMA1 channel 1, GPIOA and
  * project RAM, then restores them before returning.
  *
@@ -63,7 +63,7 @@ static __attribute__((noinline)) void stream_repeat_gpio(uint8_t hi, uint8_t lo,
 #undef PIXEL
 }
 #define STREAM_REPEAT(hi, lo, n) stream_repeat_gpio(hi, lo, n)
-#include "stream_brightness.h"
+#include "stream_protocol.h"
 
 /* Bounded delay against the stock tick at 0x200000bc. The loop cap prevents a
  * stuck tick from hanging the helper. This is not a calibrated microsecond

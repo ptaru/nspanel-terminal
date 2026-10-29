@@ -6,6 +6,8 @@
   fixed-address builder that reproduces the shipped image byte-for-byte.
 - Add in-depth display firmware, build and protocol documentation.
 - Add a source-build verification mode and update the shipped TFT checksum file.
+- Rename the native receiver, loader and protocol sources to describe their
+  roles rather than the brightness extension.
 
 ## 0.2.0 — 2026-10-29
 

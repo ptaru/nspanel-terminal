@@ -88,11 +88,11 @@ python3 tools/verify_tft.py firmware/nspanel-v92-blank.tft
 | Step | Detail |
 | --- | --- |
 | 1 | Reads `firmware/nspanel-v92-blank-base.tft`, checks its size and SHA-256. |
-| 2 | Compiles `terminal_brightness.c` for `armv6m-none-eabi` / Cortex-M0+. |
+| 2 | Compiles `terminal_receiver.c` for `armv6m-none-eabi` / Cortex-M0+. |
 | 3 | Places allocatable ELF sections at `0x20000900` and applies the ARM REL relocations used by the object. |
 | 4 | Checks the program fits the 3,568-byte pool and that `pool_entry` is at `0x20000901`. |
-| 5 | Generates `terminal_brightness_meta.h` with the program size, CRC and entry. |
-| 6 | Compiles `terminal_brightness_loader.c` at `0x200016F0` and checks it fits 844 bytes. |
+| 5 | Generates `terminal_receiver_meta.h` with the program size, CRC and entry. |
+| 6 | Compiles `terminal_loader.c` at `0x200016F0` and checks it fits 844 bytes. |
 | 7 | Replaces the 4 KiB preamble and helper-0 slot, then repairs the affected helper, resource, header and whole-file CRCs. |
 | 8 | Checks the native F130 image is unchanged, enforces the patch-region whitelist and confirms native version 92. |
 | 9 | Writes the TFT atomically to the requested output. |
@@ -110,7 +110,7 @@ small, fail-closed ELF32 reader: it supports only the section and relocation
 types these objects use and rejects undefined symbols or unsupported
 relocations. It is not a general linker.
 
-`terminal_brightness_meta.h` is generated in a temporary build directory. It is
+`terminal_receiver_meta.h` is generated in a temporary build directory. It is
 not checked in, because a stale copy would let the loader disagree with the
 program. Do not compile the loader by hand without generating that header.
 
@@ -142,7 +142,7 @@ helper bundle and page format; patching it would be a port, not this build.
 ## Changing the watchdog
 
 The fixed 3,000 ms timeout is in
-[`terminal_brightness.c`](../firmware/src/terminal_brightness.c):
+[`terminal_receiver.c`](../firmware/src/terminal_receiver.c):
 
 ```c
 if (now - last >= 3000) { /* host-inactivity watchdog */
@@ -163,8 +163,8 @@ served-file checksum and your rollback notes.
 ## Changing brightness or protocol behaviour
 
 Live brightness is implemented in
-[`stream_brightness.h`](../firmware/src/stream_brightness.h) and
-[`terminal_brightness.c`](../firmware/src/terminal_brightness.c). Keep these
+[`stream_protocol.h`](../firmware/src/stream_protocol.h) and
+[`terminal_receiver.c`](../firmware/src/terminal_receiver.c). Keep these
 rules unless you are deliberately changing the protocol:
 
 - `BRIGHTNESS` has no body and carries 0..100 in the header's `x` field.
@@ -223,7 +223,7 @@ A code change moved the entry symbol. The loader calls `0x20000901`; keep
 `pool_entry` first in the placed sections or update the documented layout and
 loader together.
 
-**`terminal_brightness_meta.h: No such file or directory`**
+**`terminal_receiver_meta.h: No such file or directory`**
 Compile through `tools/build_tft.py`; the header is generated there.
 
 **Verifier says a CRC or F130 hash is wrong**
