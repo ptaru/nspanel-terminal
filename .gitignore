@@ -1,0 +1,15 @@
+# ESPHome / Python
+.esphome/
+__pycache__/
+*.pyc
+
+# Private configuration
+secrets.yaml
+*.secrets.yaml
+local-esphome/
+
+# OS noise
+.DS_Store
+
+# Local TFT server artefacts
+*.log

@@ -1,0 +1,118 @@
+#pragma once
+#include <array>
+#include <vector>
+
+#include "esphome/components/display/display_buffer.h"
+#include "esphome/components/uart/uart.h"
+#include "esphome/core/helpers.h"
+#include "stream_engine.h"
+namespace esphome::nspanel_terminal {
+class NSPanelTouchscreen;
+class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
+ public:
+  ~NSPanelDisplay();
+  void setup() override;
+  void loop() override;
+  void update() override;
+  void draw_pixels_at(int, int, int, int, const uint8_t *, display::ColorOrder, display::ColorBitness, bool, int, int,
+                      int) override;
+  void on_shutdown() override;
+  void dump_config() override;
+  float get_setup_priority() const override { return setup_priority::PROCESSOR; }
+  display::DisplayType get_display_type() override { return display::DISPLAY_TYPE_COLOR; }
+  void request_exit() {
+    exit_requested_ = true;
+    stream_.request_exit();
+  }
+  void request_enter();
+  // Trial-only: stop all stream records without EXIT so the display watchdog runs.
+  void request_abandon();
+  void set_touchscreen(NSPanelTouchscreen *t) { touchscreen_ = t; }
+  // Trial instrumentation; off by default so production images stay quiet.
+  void set_diagnostics(bool enabled) { diagnostics_ = enabled; }
+  bool diagnostics() const { return diagnostics_; }
+  void request_full_redraw() {
+    if (buffer_) dirty_.all();
+  }
+  unsigned completed_rectangles() const { return stream_.completed(); }
+  uint32_t bytes_sent() const { return stream_.sent_bytes(); }
+  unsigned heartbeats() const { return stream_.heartbeats(); }
+  unsigned resyncs() const { return resyncs_; }
+  unsigned faults() const { return faults_; }
+  unsigned loops() const { return loops_; }
+  unsigned max_loop_gap_ms() const { return max_gap_us_ / 1000; }
+  // RAM trace avoids per-event logging during a measurement.
+  void trace_edge(bool down, uint16_t x, uint16_t y);
+  void clear_trace() { trace_head_ = trace_count_ = 0; }
+  void log_timings();
+
+ protected:
+  int get_width_internal() override { return 454; }
+  int get_height_internal() override { return 320; }
+  void draw_absolute_pixel_internal(int, int, Color) override;
+
+ private:
+  enum class State {
+    BOOT_WAIT,
+    CONNECT,
+    PAGE,
+    BKCMD,
+    SYS0,
+    SYS1,
+    SYS2,
+    CONFIG,
+    SWITCHING,
+    STREAM,
+    RECOVER_WAIT,
+    RECOVER_CONFIG,
+    RECOVER_BAUD,
+    VERIFY_SYS0,
+    VERIFY_SYS1,
+    VERIFY_SYS2,
+    VERIFY_BKCMD,
+    VERIFY_PAGE,
+    VERIFY_IDENTITY,
+    STOPPED
+  };
+  void send_command_(const char *);
+  void send_query_(State, const char *);
+  bool pump_command_();
+  bool read_fixed_(size_t);
+  bool read_terminated_();
+  void drain_();
+  bool change_baud_(uint32_t);
+  void fail_(const char *);
+  void finish_recovery_();
+  void service_stream_();
+  State state_ = State::BOOT_WAIT;
+  uint32_t deadline_ = 0, next_command_byte_ = 0;
+  uint8_t config_step_ = 0, recovery_step_ = 0, page_ = 0, saved_bkcmd_ = 3;
+  uint32_t saved_sys_[3]{};
+  uint16_t session_ = 0;
+  bool snapshots_ready_ = false, exit_requested_ = false, terminal_active_ = false, restore_page_ = false;
+  uint8_t startup_attempts_ = 0;
+  bool startup_retry_ = true;
+  std::array<uint8_t, 128> rx_{};
+  size_t rx_count_ = 0;
+  std::vector<uint8_t> command_;
+  size_t command_at_ = 0;
+  DirtyRows dirty_;
+  uint8_t *snapshot_ = nullptr;
+  StreamEngine stream_;
+  HighFrequencyLoopRequester high_frequency_;
+  NSPanelTouchscreen *touchscreen_ = nullptr;
+  bool diagnostics_ = false;
+  unsigned resyncs_ = 0, faults_ = 0;
+  uint32_t submit_ms_ = 0, last_loop_us_ = 0, max_gap_us_ = 0, abandon_deadline_ = 0;
+  bool abandon_requested_ = false;
+  unsigned loops_ = 0;
+  struct TraceEvent {
+    uint32_t t;
+    uint16_t a, b, c, d;
+    uint8_t type;
+  };
+  std::array<TraceEvent, 96> trace_buf_{};
+  unsigned trace_head_ = 0, trace_count_ = 0;
+  void trace_(uint8_t type, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0, uint16_t d = 0);
+};
+}  // namespace esphome::nspanel_terminal
