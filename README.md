@@ -19,7 +19,7 @@ The native display firmware source is included in [`firmware/src/`](firmware/src
 4. For the first installation, flash `examples/installer.yaml` and call its `upload_tft` API action. Wait for completion and the display restart.
 5. Flash `examples/panel.yaml`. It loads the component from this checkout. Verify that the ESPHome UI renders and touch works.
 
-The sample configuration uses the EU NSPanel GPIO pins and PSRAM wiring. Review it before installing, especially if your board differs. Use the TFT and component from the same checkout: the live-brightness TFT advertises a capability older component versions do not recognize. The `v0.1.0` tag predates these changes; use the current checkout until version 0.2.0 is tagged.
+The sample configuration uses the EU NSPanel GPIO pins and PSRAM wiring. Review it before installing, especially if your board differs. Use the TFT and component from the same checkout: the live-brightness TFT advertises a capability older component versions do not recognize. The `v0.1.0` tag predates these changes; use the `v0.2.0` tag or the current checkout.
 
 ## Operate
 
