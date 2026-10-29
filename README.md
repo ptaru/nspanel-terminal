@@ -4,6 +4,8 @@ Use an EU Sonoff NSPanel as an ESPHome display and touchscreen. The ESP32 stream
 
 Version **0.2.0** includes a V92/protocol 6 TFT with live brightness and a fixed 3-second host-inactivity watchdog. Its SHA-256 is `a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c`. The TFT was uploaded and reconnected on one EU panel. The component supports ESPHome 2026.10.x, PSRAM, a 454×320 visible area and single-pointer touch.
 
+The native display firmware source is included in [`firmware/src/`](firmware/src/) and builds the shipped TFT from the retained V92 base. See [display firmware internals](docs/FIRMWARE.md) for the memory map, protocol receiver, brightness, watchdog and safety limits, and [building](docs/BUILDING.md) for the toolchain and commands.
+
 ## Install
 
 1. Back up the panel's existing TFT and ESP32 configuration. Keep power stable during display updates; a failed transfer can require recovery.
@@ -25,4 +27,15 @@ The example exposes ESPHome API actions `exit_terminal`, `enter_terminal`, `uplo
 
 For subsequent TFT updates, serve the verified TFT at the configured URL and call `upload_tft` from the panel firmware. The component owns the display UART; do not configure a separate Nextion component on that UART at the same time. If the host stops transmitting, the display watchdog returns to the blank page. The blank TFT does not contain the original Sonoff UI.
 
-See [protocol](docs/PROTOCOL.md), [recovery](docs/RECOVERY.md), [component configuration](components/nspanel_terminal/README.md), and [examples](examples/README.md). The TFT contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see [LICENSE](LICENSE).
+## Build from source
+
+The display build is offline and needs only Python and a clang with the ARM backend, not ESPHome:
+
+```sh
+python3 tools/build_tft.py --check
+python3 tools/verify_tft.py build/nspanel-v92-blank.tft
+```
+
+Or run `make verify`. `--check` reproduces the official TFT byte-for-byte. For a modified build, omit `--check` and verify with `tools/verify_tft.py --allow-modified build/nspanel-v92-blank.tft`. The builder never uploads. See [building](docs/BUILDING.md) and the [source map](firmware/src/).
+
+See [firmware internals](docs/FIRMWARE.md), [protocol](docs/PROTOCOL.md), [recovery](docs/RECOVERY.md), [component configuration](components/nspanel_terminal/README.md), [examples](examples/README.md), and [contributing](CONTRIBUTING.md). The TFT contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see [LICENSE](LICENSE).

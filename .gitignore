@@ -13,3 +13,8 @@ local-esphome/
 
 # Local TFT server artefacts
 *.log
+
+# TFT build output
+build/
+*.o
+*.su

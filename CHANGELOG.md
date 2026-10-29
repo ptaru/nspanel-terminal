@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Publish the native display firmware source, the V92 base TFT and a
+  fixed-address builder that reproduces the shipped image byte-for-byte.
+- Add in-depth display firmware, build and protocol documentation.
+- Add a source-build verification mode and update the shipped TFT checksum file.
+
 ## 0.2.0 — 2026-10-29
 
 - Ship the hardware-tested blank V92 TFT with live brightness and a fixed 3-second host-inactivity watchdog.

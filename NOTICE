@@ -6,11 +6,15 @@ ITEAD/Nextion.
 Sonoff and NSPanel are trademarks of their respective owners. Nextion is a
 trademark of ITEAD.
 
-`firmware/nspanel-v92-blank.tft` contains the Nextion display runtime and the
-NSPanel display configuration. It is provided for use with genuine NSPanel
-hardware only. The TFT is a modified build of the blank UI exported with Nextion
-Editor 1.65.1, patched with the V92 terminal loader. No personal or
-site-specific UI content is included.
+`firmware/nspanel-v92-blank.tft` and `firmware/nspanel-v92-blank-base.tft`
+contain the Nextion display runtime and the NSPanel display configuration.
+They are provided for use with genuine NSPanel hardware only. The TFT is a
+modified build of the blank UI exported with Nextion Editor 1.65.1, patched with
+the V92 terminal loader. No personal or site-specific UI content is included.
+
+The native display source in `firmware/src/` is original project code and is
+provided under the repository's MIT license. It calls fixed routines in the
+stock runtime; no vendor source code is included.
 
 The ESPHome component is derived from ESPHome's public component interfaces and
 retains the upstream MIT licensing terms where applicable.

@@ -1,11 +1,20 @@
 #!/usr/bin/env python3
-"""Verify the public V92 blank TFT: size, SHA-256, CRCs, identity and UI."""
+"""Verify a V92 blank NSPanel TFT: size, SHA-256, CRCs, identity and UI.
+
+The default mode checks the official shipped image. Use --allow-modified for a
+local source build: the SHA-256 is then informational, but every structural and
+CRC check still runs.
+"""
 from __future__ import annotations
 
+import argparse
 import hashlib
 import struct
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tft_crc import crc  # noqa: E402
 
 EXPECTED_SIZE = 264936
 EXPECTED_SHA256 = "a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c"
@@ -15,24 +24,6 @@ EXPECTED_NATIVE_VERSION = 92
 EXPECTED_ALLOCATION = 0x30000
 EXPECTED_HELPER_SLOT = 0x74
 EXPECTED_HELPER_SIZE = 844
-
-# Same CRC the Nextion container and the project checks use: each byte is
-# fed as a zero-extended 32-bit word, MSB first, no final xor.
-_TABLE = []
-for _n in range(256):
-    _r = _n << 24
-    for _ in range(8):
-        _r = ((_r << 1) ^ (0x04C11DB7 if _r & 0x80000000 else 0)) & 0xFFFFFFFF
-    _TABLE.append(_r)
-
-
-def crc(data: bytes, seed: int = 0xFFFFFFFF) -> int:
-    value = seed
-    for byte in data:
-        value ^= byte
-        for _ in range(4):
-            value = ((value << 8) & 0xFFFFFFFF) ^ _TABLE[value >> 24]
-    return value
 
 
 def u32(data: bytes, offset: int) -> int:
@@ -45,11 +36,16 @@ def fail(message: str) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print(f"usage: {Path(sys.argv[0]).name} PATH_TO_TFT")
-        raise SystemExit(2)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("path", type=Path, help="TFT to verify")
+    parser.add_argument(
+        "--allow-modified",
+        action="store_true",
+        help="skip the official SHA-256 equality check for a local source build",
+    )
+    args = parser.parse_args()
 
-    path = Path(sys.argv[1])
+    path = args.path
     if not path.is_file():
         fail(f"not a file: {path}")
     data = path.read_bytes()
@@ -57,7 +53,7 @@ def main() -> None:
     if len(data) != EXPECTED_SIZE:
         fail(f"size is {len(data)}, expected {EXPECTED_SIZE}")
     digest = hashlib.sha256(data).hexdigest()
-    if digest != EXPECTED_SHA256:
+    if not args.allow_modified and digest != EXPECTED_SHA256:
         fail(f"SHA-256 is {digest}, expected {EXPECTED_SHA256}")
 
     if u32(data, 0x04) != 0x14532:
@@ -71,7 +67,6 @@ def main() -> None:
     if u32(data, 0x40) != EXPECTED_ALLOCATION:
         fail("unexpected resource allocation size")
 
-    native_start = 0x14532 + 16  # first native record follows the 4-byte count
     tag, relative, size, _, _ = struct.unpack_from("<HIIII", data, 0x14532 + 16)
     start = 0x14532 + relative
     if tag != 0xF130 or size != EXPECTED_F130_SIZE:
@@ -107,13 +102,17 @@ def main() -> None:
         if forbidden in data:
             fail(f"personal label found: {forbidden!r}")
 
+    official = digest == EXPECTED_SHA256
     print("OK")
     print(f"  file       : {path}")
     print(f"  size       : {len(data)} bytes")
-    print(f"  sha256     : {digest}")
-    print(f"  display    : NX4832F035_011C / F130 / 61744")
+    if official:
+        print(f"  sha256     : {digest}")
+    else:
+        print(f"  sha256     : {digest} (modified build, not the official image)")
+    print("  display    : NX4832F035_011C / F130 / 61744")
     print(f"  native     : version {EXPECTED_NATIVE_VERSION}")
-    print(f"  UI         : blank 'waiting for connection' page")
+    print("  UI         : blank 'waiting for connection' page")
     print("  crcs       : header1, header2, resources, helper, file all match")
 
 
