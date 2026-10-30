@@ -119,6 +119,8 @@ class StreamEngine {
     return std::min<size_t>(tx_.size() - at_, 512 - (sent_ - consumed_));
   }
   const uint8_t *data() const { return tx_.data() + at_; }
+  // Reset the reverse-timeout clock without putting a record on the wire.
+  void keepalive(uint32_t now) { last_report_ = now; }
   void sent(size_t n, uint32_t now) {
     if (n > allowance()) {
       fail("local credit overrun");
@@ -270,6 +272,11 @@ struct DirtyRows {
     next = 0;
     rows.fill(0);
     for (unsigned y = 0; y < height; ++y) rows[y] = full;
+  }
+  bool empty() const {
+    for (unsigned y = 0; y < height; ++y)
+      if (rows[y]) return false;
+    return true;
   }
   bool take(unsigned &x, unsigned &y, unsigned &w, unsigned &h) {
     unsigned scanned = 0;

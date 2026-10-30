@@ -124,9 +124,161 @@ void NSPanelDisplay::report_render_measurement() {
   diagnostics_ = false;
   measurement_active_ = false;
 }
+void NSPanelDisplay::start_render_benchmark(unsigned repeats) {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (state_ != State::STREAM || !stream_.idle() || !buffer_ || !snapshot_ || benchmark_active_ ||
+      render_benchmark_active_ || render_start_pending_ || exit_requested_) {
+    ESP_LOGW(TAG, "Render benchmark requires an idle streaming terminal");
+    return;
+  }
+  render_repeats_ = std::min(std::max(repeats, 1u), unsigned(render_results_.size()));
+  render_index_ = 0;
+  render_benchmark_active_ = true;
+  render_start_pending_ = true;
+  render_repeat_active_ = false;
+  render_repeat_complete_ = false;
+  render_wait_refresh_ = false;
+  render_stats_ = RenderStats{};
+  ESP_LOGI(TAG, "Render benchmark: %u full-screen repeats", render_repeats_);
+}
+void NSPanelDisplay::begin_render_repeat_() {
+  // Called from loop() with the mutex held. The refresh runs on LVGL's next
+  // timer tick; the transport task keeps servicing the link while it renders.
+  if (!render_benchmark_active_ || state_ != State::STREAM || !buffer_ || !snapshot_) {
+    cancel_render_benchmark_("terminal left streaming");
+    return;
+  }
+  if (refresh_active_) {
+    // Let the in-flight refresh finish before invalidating again.
+    render_start_pending_ = true;
+    return;
+  }
+  render_stats_ = RenderStats{};
+  render_repeat_started_us_ = micros();
+  render_first_write_us_ = render_last_write_us_ = 0;
+  render_wait_kind_ = 0;
+  render_wait_refresh_ = false;
+  render_refresh_started_us_ = 0;
+  render_bytes_start_ = bytes_sent();
+  render_rect_start_ = completed_rectangles();
+  render_fault_start_ = faults_;
+  render_resync_start_ = resyncs_;
+  render_repeat_active_ = true;
+  render_repeat_complete_ = false;
+  dirty_.all();
+#ifdef USE_LVGL
+  if (auto *display = lv_display_get_default(); display != nullptr) {
+    if (auto *screen = lv_screen_active(); screen != nullptr) {
+      render_wait_refresh_ = true;
+      render_refresh_deadline_ms_ = millis() + 5000;
+      lv_obj_invalidate(screen);
+    }
+  }
+#endif
+  if (!render_wait_refresh_ && render_index_ == 0)
+    ESP_LOGW(TAG, "Render benchmark has no LVGL display; measuring transport only");
+  ESP_LOGI(TAG, "Render benchmark %u/%u started", render_index_ + 1, render_repeats_);
+}
+void NSPanelDisplay::on_lvgl_refresh_start_() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  refresh_active_ = true;
+  if (render_benchmark_active_ && render_repeat_active_ && render_wait_refresh_ && !render_refresh_started_us_)
+    render_refresh_started_us_ = micros();
+}
+void NSPanelDisplay::on_lvgl_refresh_ready_() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  refresh_active_ = false;
+  if (render_benchmark_active_ && render_repeat_active_ && render_wait_refresh_) {
+    if (render_refresh_started_us_) render_stats_.refresh_us += micros() - render_refresh_started_us_;
+    render_refresh_started_us_ = 0;
+    render_wait_refresh_ = false;
+    dirty_.all();
+  }
+}
+void NSPanelDisplay::close_render_wait_() {
+  if (!render_wait_kind_) return;
+  const uint32_t waited = micros() - render_wait_started_us_;
+  if (render_wait_kind_ == 1)
+    render_stats_.credit_wait_us += waited;
+  else
+    render_stats_.uart_wait_us += waited;
+  render_wait_kind_ = 0;
+}
+void NSPanelDisplay::finish_render_repeat_() {
+  if (!render_benchmark_active_ || render_index_ >= render_repeats_) return;
+  render_repeat_active_ = false;
+  const RenderStats &st = render_results_[render_index_];
+  const unsigned repeat = render_index_ + 1;
+  const unsigned util_total = st.total_us ? unsigned((uint64_t(st.bytes) * 250) / st.total_us) : 0;
+  const unsigned util_transfer = st.transfer_us ? unsigned((uint64_t(st.bytes) * 250) / st.transfer_us) : 0;
+  ESP_LOGI(TAG,
+           "Render benchmark %u/%u: total=%u ms, refresh=%u ms, transfer=%u ms, %u bytes, %u rects, "
+           "%u%% total wire, %u%% transfer wire, %u faults, %u resyncs",
+           repeat, render_repeats_, unsigned(st.total_us / 1000), unsigned(st.refresh_us / 1000),
+           unsigned(st.transfer_us / 1000), unsigned(st.bytes), unsigned(st.rectangles), util_total, util_transfer,
+           unsigned(st.faults), unsigned(st.resyncs));
+  ESP_LOGI(TAG,
+           "Render phases %u/%u: copy=%u us encode=%u us write=%u us credit_wait=%u us/%u uart_wait=%u us/%u "
+           "done_wait=%u us service=%u reports=%u",
+           repeat, render_repeats_, unsigned(st.copy_us), unsigned(st.encode_us), unsigned(st.write_us),
+           unsigned(st.credit_wait_us), unsigned(st.credit_stalls), unsigned(st.uart_wait_us),
+           unsigned(st.uart_stalls), unsigned(st.done_wait_us), unsigned(st.service_calls), unsigned(st.reports));
+  ++render_index_;
+  if (render_index_ < render_repeats_) {
+    render_start_pending_ = true;
+    return;
+  }
+  log_render_summary_();
+  render_benchmark_active_ = false;
+}
+void NSPanelDisplay::log_render_summary_() {
+  if (!render_index_) return;
+  uint64_t total = 0, refresh = 0, transfer = 0, copy = 0, encode = 0, write = 0;
+  uint64_t credit = 0, uart = 0, done = 0, bytes = 0;
+  uint32_t min_total = 0xffffffffu, max_total = 0;
+  for (unsigned i = 0; i < render_index_; ++i) {
+    const RenderStats &s = render_results_[i];
+    total += s.total_us;
+    refresh += s.refresh_us;
+    transfer += s.transfer_us;
+    copy += s.copy_us;
+    encode += s.encode_us;
+    write += s.write_us;
+    credit += s.credit_wait_us;
+    uart += s.uart_wait_us;
+    done += s.done_wait_us;
+    bytes += s.bytes;
+    min_total = std::min(min_total, s.total_us);
+    max_total = std::max(max_total, s.total_us);
+  }
+  const uint64_t n = render_index_;
+  auto avg = [n](uint64_t sum) { return unsigned(sum / n); };
+  const unsigned util_total = total ? unsigned((bytes * 250) / total) : 0;
+  const unsigned util_transfer = transfer ? unsigned((bytes * 250) / transfer) : 0;
+  ESP_LOGI(TAG,
+           "Render benchmark summary (%u): total avg=%u ms (min=%u max=%u), refresh avg=%u ms, transfer avg=%u ms, "
+           "wire avg=%u%% total/%u%% transfer",
+           unsigned(n), avg(total) / 1000, unsigned(min_total / 1000), unsigned(max_total / 1000), avg(refresh) / 1000,
+           avg(transfer) / 1000, util_total, util_transfer);
+  ESP_LOGI(TAG,
+           "Render phases avg: copy=%u us encode=%u us write=%u us credit_wait=%u us uart_wait=%u us done_wait=%u us",
+           avg(copy), avg(encode), avg(write), avg(credit), avg(uart), avg(done));
+}
+void NSPanelDisplay::cancel_render_benchmark_(const char *reason) {
+  if (!render_benchmark_active_ && !render_start_pending_) return;
+  render_benchmark_active_ = false;
+  render_start_pending_ = false;
+  render_repeat_active_ = false;
+  render_repeat_complete_ = false;
+  render_wait_refresh_ = false;
+  render_refresh_started_us_ = 0;
+  render_wait_kind_ = 0;
+  ESP_LOGW(TAG, "Render benchmark cancelled: %s", reason);
+}
 void NSPanelDisplay::start_protocol_benchmark() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (benchmark_active_ || state_ != State::STREAM || !stream_.idle() || !buffer_ || !snapshot_ || exit_requested_) {
+  if (benchmark_active_ || render_benchmark_active_ || render_start_pending_ || state_ != State::STREAM ||
+      !stream_.idle() || !buffer_ || !snapshot_ || exit_requested_) {
     ESP_LOGW(TAG, "Protocol benchmark requires an idle streaming terminal");
     return;
   }
@@ -360,6 +512,7 @@ void NSPanelDisplay::service_stream_(int incoming) {
     protocol::Reply r;
     const unsigned completed = stream_.completed();
     if (!stream_.feed(bytes[i], millis(), r)) continue;
+    if (render_repeat_active_) ++render_stats_.reports;
     if (benchmark_legacy_) {
       ++benchmark_reports_;
       benchmark_highwater_ = std::max(benchmark_highwater_, r.highwater);
@@ -371,7 +524,15 @@ void NSPanelDisplay::service_stream_(int incoming) {
     if (r.status == protocol::BRIGHTNESS_DONE)
       ESP_LOGI(TAG, "Live brightness ACK received");
     if (r.status == protocol::ERROR && !stream_.failed()) ++resyncs_;
-    if (stream_.completed() != completed) trace_(5, uint16_t(millis() - submit_ms_));
+    if (stream_.completed() != completed) {
+      if (render_repeat_active_ && render_last_write_us_) {
+        render_stats_.done_wait_us += micros() - render_last_write_us_;
+        render_last_write_us_ = 0;
+        // The final wait belongs to the DONE round trip, not to encoding.
+        render_wait_kind_ = 0;
+      }
+      trace_(5, uint16_t(millis() - submit_ms_));
+    }
     if (touchscreen_ && r.freshness == 1 && !pending_touches_.push(r.mask & 1, r.x, r.y)) {
       fail_("touch edge queue overflow");
       return;
@@ -482,11 +643,13 @@ void NSPanelDisplay::service_stream_(int incoming) {
       submit_ms_ = millis();
     }
   }
-  if (stream_.idle() && !benchmark_active_ && !exit_requested_ && !refresh_active_) {
+  if (stream_.idle() && !benchmark_active_ && !exit_requested_ && !refresh_active_ && !render_wait_refresh_) {
     unsigned x, y, w, h;
     if (dirty_.take(x, y, w, h)) {
+      const uint32_t copy_started = render_repeat_active_ ? micros() : 0;
       for (unsigned row = 0; row < h; row++)
         std::memcpy(snapshot_ + 2 * row * w, buffer_ + 2 * ((y + row) * width_ + x), 2 * w);
+      if (render_repeat_active_) render_stats_.copy_us += micros() - copy_started;
       if (!stream_.submit(x, y, w, h, snapshot_, millis())) {
         dirty_.all();
         fail_("rectangle submit");
@@ -498,9 +661,18 @@ void NSPanelDisplay::service_stream_(int incoming) {
   }
   do {
     if (benchmark_legacy_) ++benchmark_service_calls_;
-    const uint32_t encode_started = benchmark_legacy_ ? micros() : 0;
+    if (render_wait_refresh_) {
+      // No frame is pending yet; keep the reverse timeout fresh without
+      // putting keepalive PINGs into the measured frame transfer.
+      stream_.keepalive(millis());
+      break;
+    }
+    if (render_repeat_active_) ++render_stats_.service_calls;
+    const bool timed_encode = benchmark_legacy_ || render_repeat_active_;
+    const uint32_t encode_started = timed_encode ? micros() : 0;
     stream_.prepare(millis());
     if (benchmark_legacy_) benchmark_encode_us_ += micros() - encode_started;
+    if (render_repeat_active_) render_stats_.encode_us += micros() - encode_started;
     if (stream_.failed()) {
       fail_(stream_.error());
       return;
@@ -509,6 +681,16 @@ void NSPanelDisplay::service_stream_(int incoming) {
     const size_t available = parent_->available_for_write();
     size_t count = std::min(allowance, available);
     if (!count) {
+      if (render_repeat_active_ && stream_.pending() && !render_wait_kind_) {
+        if (!allowance) {
+          render_wait_kind_ = 1;
+          ++render_stats_.credit_stalls;
+        } else if (!available) {
+          render_wait_kind_ = 2;
+          ++render_stats_.uart_stalls;
+        }
+        if (render_wait_kind_) render_wait_started_us_ = micros();
+      }
       if (benchmark_legacy_ && stream_.pending()) {
         if (!allowance) {
           ++benchmark_credit_stalls_;
@@ -520,14 +702,36 @@ void NSPanelDisplay::service_stream_(int incoming) {
       }
       break;
     }
-    const uint32_t write_started = benchmark_legacy_ ? micros() : 0;
+    if (render_repeat_active_) {
+      close_render_wait_();
+      if (!render_first_write_us_) render_first_write_us_ = micros();
+    }
+    const uint32_t write_started = timed_encode ? micros() : 0;
     write_array(stream_.data(), count);
     if (benchmark_legacy_) benchmark_write_us_ += micros() - write_started;
+    if (render_repeat_active_) {
+      render_stats_.write_us += micros() - write_started;
+      render_last_write_us_ = micros();
+    }
     stream_.sent(count, millis());
   } while (uint32_t(micros() - started) < 1500);
+  if (render_repeat_active_ && !render_wait_refresh_ && stream_.idle() && dirty_.empty() &&
+      completed_rectangles() != render_rect_start_) {
+    const uint32_t ended = micros();
+    render_repeat_active_ = false;
+    render_stats_.total_us = ended - render_repeat_started_us_;
+    render_stats_.transfer_us = render_first_write_us_ ? ended - render_first_write_us_ : 0;
+    render_stats_.bytes = bytes_sent() - render_bytes_start_;
+    render_stats_.rectangles = uint16_t(completed_rectangles() - render_rect_start_);
+    render_stats_.faults = uint16_t(faults_ - render_fault_start_);
+    render_stats_.resyncs = uint16_t(resyncs_ - render_resync_start_);
+    render_results_[render_index_] = render_stats_;
+    render_repeat_complete_ = true;
+  }
 }
 void NSPanelDisplay::fail_(const char *reason) {
   benchmark_active_ = false;
+  cancel_render_benchmark_(reason);
   // The stream may still reference the benchmark snapshot until it is reset
   // on re-entry, so retain it here and release it at the next safe start.
   ++faults_;
@@ -738,16 +942,32 @@ void NSPanelDisplay::loop() {
   if (!refresh_hooks_installed_) {
     if (auto *display = lv_display_get_default()) {
       lv_display_add_event_cb(display, [](lv_event_t *e) {
-        static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->set_refresh_active(true);
+        static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->on_lvgl_refresh_start_();
       }, LV_EVENT_REFR_START, this);
       lv_display_add_event_cb(display, [](lv_event_t *e) {
-        static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->set_refresh_active(false);
+        static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->on_lvgl_refresh_ready_();
       }, LV_EVENT_REFR_READY, this);
       refresh_hooks_installed_ = true;
       ESP_LOGI(TAG, "LVGL refresh boundary gating enabled");
     }
   }
 #endif
+  if (render_start_pending_ && !refresh_active_) {
+    render_start_pending_ = false;
+    begin_render_repeat_();
+  }
+  if (render_wait_refresh_ && int32_t(millis() - render_refresh_deadline_ms_) >= 0) {
+    ESP_LOGW(TAG, "Render benchmark refresh timeout; measuring transport only");
+    render_wait_refresh_ = false;
+    render_refresh_started_us_ = 0;
+    render_stats_.refresh_us = 0;
+    render_repeat_started_us_ = micros();
+    dirty_.all();
+  }
+  if (render_repeat_complete_) {
+    render_repeat_complete_ = false;
+    finish_render_repeat_();
+  }
   if (touchscreen_) {
     if (touch_reset_pending_) {
       touchscreen_->reset_contacts();

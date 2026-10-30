@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add a `run_render_benchmark` diagnostic action. It forces one or more
+  full-screen LVGL refreshes through the normal dirty-rectangle path and
+  reports total, refresh, transfer, copy, encode, UART-write, credit-wait and
+  DONE-wait timings plus wire utilisation.
 - Wake the ESP32 transport task when reverse UART data arrives, reducing idle gaps during sustained display updates. The EU historical gradient and random workloads improved from about 2.6 s and 9.3 s to 2.22 s and 7.19 s over eight full-screen frames, with unchanged wire content and no transport faults. The TFT receiver is unchanged.
 
 ## 0.3.0 — 2026-10-29

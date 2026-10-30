@@ -27,6 +27,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   display::DisplayType get_display_type() override { return display::DISPLAY_TYPE_COLOR; }
   void request_exit() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
+    cancel_render_benchmark_("exit requested");
     exit_requested_ = true;
     stream_.request_exit();
   }
@@ -73,6 +74,9 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void log_timings();
   void start_render_measurement();
   void report_render_measurement();
+  // One action, N full-screen LVGL redraws through the normal dirty-rectangle
+  // path. Each repeat is timed from the refresh start to the final DONE.
+  void start_render_benchmark(unsigned repeats = 5);
   void start_protocol_benchmark();
   void start_legacy_protocol_benchmark();
   void start_legacy_protocol_benchmark_reuse();
@@ -177,6 +181,33 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   unsigned benchmark_reports_ = 0, benchmark_highwater_ = 0;
   unsigned benchmark_idle_credit_stalls_ = 0;
   uint32_t benchmark_write_us_ = 0;
+  struct RenderStats {
+    uint32_t total_us = 0, refresh_us = 0, transfer_us = 0;
+    uint32_t copy_us = 0, encode_us = 0, write_us = 0;
+    uint32_t credit_wait_us = 0, uart_wait_us = 0, done_wait_us = 0;
+    uint32_t bytes = 0;
+    uint16_t rectangles = 0, credit_stalls = 0, uart_stalls = 0;
+    uint16_t service_calls = 0, reports = 0, faults = 0, resyncs = 0;
+  };
+  void begin_render_repeat_();
+  void finish_render_repeat_();
+  void log_render_summary_();
+  void close_render_wait_();
+  void cancel_render_benchmark_(const char *reason);
+  void on_lvgl_refresh_start_();
+  void on_lvgl_refresh_ready_();
+  bool render_benchmark_active_ = false, render_start_pending_ = false;
+  bool render_repeat_active_ = false, render_repeat_complete_ = false;
+  bool render_wait_refresh_ = false;
+  uint32_t render_refresh_started_us_ = 0, render_refresh_deadline_ms_ = 0;
+  unsigned render_repeats_ = 0, render_index_ = 0;
+  uint32_t render_repeat_started_us_ = 0, render_first_write_us_ = 0, render_last_write_us_ = 0;
+  uint32_t render_bytes_start_ = 0;
+  unsigned render_rect_start_ = 0, render_fault_start_ = 0, render_resync_start_ = 0;
+  uint8_t render_wait_kind_ = 0;
+  uint32_t render_wait_started_us_ = 0;
+  RenderStats render_stats_{};
+  std::array<RenderStats, 8> render_results_{};
   void benchmark_report_();
   void trace_(uint8_t type, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0, uint16_t d = 0);
   static void task_entry_(void *arg);
