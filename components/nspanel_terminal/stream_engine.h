@@ -283,16 +283,17 @@ struct DirtyRows {
     while (scanned < height && rows[(next + scanned) % height] == 0) ++scanned;
     if (scanned == height) return false;
     y = (next + scanned) % height;
+    // Span the whole row, gaps included: a rectangle costs about a millisecond of round trip, a clean 8-pixel
+    // tile only a fraction of that on the display's LCD bus.
     const unsigned first = __builtin_ctzll(rows[y]);
-    unsigned last = first;
-    while (last + 1 < columns && (rows[y] & (uint64_t(1) << (last + 1)))) ++last;
+    const unsigned last = 63 - __builtin_clzll(rows[y]);
     const uint64_t mask = (full >> (columns - (last - first + 1))) << first;
     x = first * TILE;
     const unsigned right = std::min<unsigned>(width, (last + 1) * TILE);
     w = right - x;
     h = 1;
     rows[y] &= ~mask;
-    // Consume only matching columns. Other runs in those rows stay queued.
+    // Consume only matching columns. Dirty tiles outside the span stay queued.
     while (h < 16 && y + h < height && (rows[y + h] & mask)) {
       rows[y + h] &= ~mask;
       ++h;
