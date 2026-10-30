@@ -392,6 +392,9 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
                                     int x_offset, int y_offset, int x_pad) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (this->buffer_ == nullptr) return;
+  // Gate snapshots from the first flush of an LVGL refresh to REFR_READY. Gating from REFR_START would also stall
+  // the transport while LVGL renders, even when the refresh changes nothing.
+  if (refresh_hooks_installed_) refresh_active_ = true;
   if (order != display::COLOR_ORDER_RGB || bitness != display::COLOR_BITNESS_565 || big_endian ||
       this->get_rotation() != display::DISPLAY_ROTATION_0_DEGREES || this->is_clipping() || x_start < 0 ||
       y_start < 0 || w <= 0 || h <= 0 || x_start + w > width_ || y_start + h > height_ ||
