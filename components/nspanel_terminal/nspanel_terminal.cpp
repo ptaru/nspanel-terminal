@@ -102,6 +102,7 @@ void NSPanelDisplay::start_render_measurement() {
   measurement_faults_ = faults_;
   measurement_resyncs_ = resyncs_;
   measurement_started_ms_ = millis();
+  measurement_first_submit_us_ = measurement_last_done_us_ = 0;
   clear_trace();
   diagnostics_ = true;
   measurement_active_ = true;
@@ -114,8 +115,14 @@ void NSPanelDisplay::report_render_measurement() {
     return;
   }
   diagnostics_ = false;
-  ESP_LOGI(TAG, "Render measurement: %u ms, %u UART bytes, %u rectangles, %u faults, %u resyncs, %u trace events%s",
-           unsigned(millis() - measurement_started_ms_), unsigned(bytes_sent() - measurement_bytes_),
+  const uint32_t span_us = measurement_first_submit_us_ && measurement_last_done_us_ >= measurement_first_submit_us_
+                               ? measurement_last_done_us_ - measurement_first_submit_us_
+                               : 0;
+  ESP_LOGI(TAG,
+           "Render measurement: %u ms (%u ms submit-to-done), %u UART bytes, %u rectangles, %u faults, %u resyncs, "
+           "%u trace events%s",
+           unsigned(millis() - measurement_started_ms_), unsigned(span_us / 1000),
+           unsigned(bytes_sent() - measurement_bytes_),
            unsigned(uint16_t(completed_rectangles() - measurement_rectangles_)),
            faults_ - measurement_faults_, resyncs_ - measurement_resyncs_, trace_count_,
            trace_count_ == trace_buf_.size() ? " (buffer may have wrapped)" : "");
@@ -539,6 +546,7 @@ void NSPanelDisplay::service_stream_(int incoming) {
         render_wait_kind_ = 0;
       }
       trace_(5, uint16_t(millis() - submit_ms_));
+      if (measurement_active_) measurement_last_done_us_ = micros();
     }
     if (touchscreen_ && r.freshness == 1 && !pending_touches_.push(r.mask & 1, r.x, r.y)) {
       fail_("touch edge queue overflow");
@@ -663,6 +671,7 @@ void NSPanelDisplay::service_stream_(int incoming) {
         return;
       }
       submit_ms_ = millis();
+      if (measurement_active_ && !measurement_first_submit_us_) measurement_first_submit_us_ = micros();
       trace_(4, uint16_t(w), uint16_t(h), uint16_t(x), uint16_t(y));
     }
   }
