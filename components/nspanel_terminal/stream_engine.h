@@ -247,6 +247,11 @@ struct DirtyRows {
   static constexpr unsigned TILE = 8;
   static constexpr unsigned MAX_COLUMNS = 64;
   static constexpr unsigned MAX_ROWS = 480;
+  // Merge dirty runs separated by at most this many clean tiles. A rectangle
+  // costs about a millisecond of round trip; streaming a clean tile costs only
+  // a fraction of that. Wider gaps are split so a sparse row does not become a
+  // full-width transfer.
+  static constexpr unsigned MAX_GAP_TILES = 16;
   std::array<uint64_t, MAX_ROWS> rows{};
   unsigned next = 0;
   unsigned width = 454, height = 320, columns = 57;
@@ -283,17 +288,30 @@ struct DirtyRows {
     while (scanned < height && rows[(next + scanned) % height] == 0) ++scanned;
     if (scanned == height) return false;
     y = (next + scanned) % height;
-    // Span the whole row, gaps included: a rectangle costs about a millisecond of round trip, a clean 8-pixel
-    // tile only a fraction of that on the display's LCD bus.
     const unsigned first = __builtin_ctzll(rows[y]);
-    const unsigned last = 63 - __builtin_clzll(rows[y]);
+    unsigned last = 63 - __builtin_clzll(rows[y]);
+    // Merge runs across small gaps, but split at the widest gap when it grows
+    // beyond MAX_GAP_TILES. The right side stays queued for the next take().
+    unsigned gap_start = 0, gap_length = 0;
+    unsigned run_start = first;
+    for (unsigned i = first + 1; i <= last; ++i) {
+      if ((rows[y] & (uint64_t(1) << i)) == 0) continue;
+      const unsigned gap = i - run_start - 1;
+      if (gap > gap_length) {
+        gap_length = gap;
+        gap_start = run_start + 1;
+      }
+      run_start = i;
+    }
+    if (gap_length > MAX_GAP_TILES) last = gap_start - 1;
     const uint64_t mask = (full >> (columns - (last - first + 1))) << first;
     x = first * TILE;
     const unsigned right = std::min<unsigned>(width, (last + 1) * TILE);
     w = right - x;
     h = 1;
     rows[y] &= ~mask;
-    // Consume only matching columns. Dirty tiles outside the span stay queued.
+    // Consume only matching columns. Dirty tiles outside the span, in this row
+    // or later ones, stay queued.
     while (h < 16 && y + h < height && (rows[y + h] & mask)) {
       rows[y + h] &= ~mask;
       ++h;
