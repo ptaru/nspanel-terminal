@@ -194,6 +194,9 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void log_render_summary_();
   void close_render_wait_();
   void cancel_render_benchmark_(const char *reason);
+  // Track the LVGL refresh independently of the snapshot gate. draw_pixels_at()
+  // starts the gate on the first flush, but only while this is true, so a direct
+  // bulk draw outside a refresh cannot leave refresh_active_ stuck.
   void on_lvgl_refresh_start_();
   void on_lvgl_refresh_ready_();
   bool render_benchmark_active_ = false, render_start_pending_ = false;
@@ -217,6 +220,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   std::atomic<bool> task_running_{false};
   TaskHandle_t task_ = nullptr;
   bool refresh_active_ = false;
+  bool lvgl_refreshing_ = false;
   bool refresh_hooks_installed_ = false;
 };
 }  // namespace esphome::nspanel_terminal

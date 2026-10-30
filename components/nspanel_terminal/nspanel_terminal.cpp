@@ -148,7 +148,7 @@ void NSPanelDisplay::begin_render_repeat_() {
     cancel_render_benchmark_("terminal left streaming");
     return;
   }
-  if (refresh_active_) {
+  if (refresh_active_ || lvgl_refreshing_) {
     // Let the in-flight refresh finish before invalidating again.
     render_start_pending_ = true;
     return;
@@ -181,12 +181,13 @@ void NSPanelDisplay::begin_render_repeat_() {
 }
 void NSPanelDisplay::on_lvgl_refresh_start_() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  refresh_active_ = true;
+  lvgl_refreshing_ = true;
   if (render_benchmark_active_ && render_repeat_active_ && render_wait_refresh_ && !render_refresh_started_us_)
     render_refresh_started_us_ = micros();
 }
 void NSPanelDisplay::on_lvgl_refresh_ready_() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  lvgl_refreshing_ = false;
   refresh_active_ = false;
   if (render_benchmark_active_ && render_repeat_active_ && render_wait_refresh_) {
     if (render_refresh_started_us_) render_stats_.refresh_us += micros() - render_refresh_started_us_;
@@ -392,9 +393,12 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
                                     int x_offset, int y_offset, int x_pad) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (this->buffer_ == nullptr) return;
-  // Gate snapshots from the first flush of an LVGL refresh to REFR_READY. Gating from REFR_START would also stall
-  // the transport while LVGL renders, even when the refresh changes nothing.
-  if (refresh_hooks_installed_) refresh_active_ = true;
+  // Gate snapshots from the first flush of an LVGL refresh to REFR_READY. The
+  // refresh-start hook only marks that a refresh is in progress; gating there
+  // would also stall the transport while LVGL renders, even when the refresh
+  // changes nothing. The LVGL flag keeps a direct bulk draw outside a refresh
+  // from leaving the gate set.
+  if (refresh_hooks_installed_ && lvgl_refreshing_) refresh_active_ = true;
   if (order != display::COLOR_ORDER_RGB || bitness != display::COLOR_BITNESS_565 || big_endian ||
       this->get_rotation() != display::DISPLAY_ROTATION_0_DEGREES || this->is_clipping() || x_start < 0 ||
       y_start < 0 || w <= 0 || h <= 0 || x_start + w > width_ || y_start + h > height_ ||
@@ -954,11 +958,11 @@ void NSPanelDisplay::loop() {
         static_cast<NSPanelDisplay *>(lv_event_get_user_data(e))->on_lvgl_refresh_ready_();
       }, LV_EVENT_REFR_READY, this);
       refresh_hooks_installed_ = true;
-      ESP_LOGI(TAG, "LVGL refresh boundary gating enabled");
+      ESP_LOGI(TAG, "LVGL refresh tracking and snapshot gating enabled");
     }
   }
 #endif
-  if (render_start_pending_ && !refresh_active_) {
+  if (render_start_pending_ && !refresh_active_ && !lvgl_refreshing_) {
     render_start_pending_ = false;
     begin_render_repeat_();
   }
