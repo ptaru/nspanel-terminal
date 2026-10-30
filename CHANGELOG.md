@@ -5,7 +5,7 @@
 - Include the `esp_http_client` IDF component, which current ESPHome excludes by default, so TFT upload links.
 - Leave Nextion protocol reparse mode (`recmod=1`) before a TFT upload, so the upload also starts from TFTs that use it, such as the Lovelace UI.
 - Hold UART snapshots from the first LVGL flush instead of `REFR_START`, so a refresh that renders but changes nothing no longer stalls the transport.
-- Send each dirty row band as one rectangle spanning all dirty tiles, gaps included. A page switch now takes 28 rectangles instead of 132.
+- Send each dirty row band as one rectangle spanning all dirty tiles, gaps included. A page switch on an EU panel now takes 28 rectangles instead of 70.
 
 ## 0.3.0 — 2026-10-29
 
