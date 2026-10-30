@@ -32,7 +32,7 @@ report 72; the component requires 92. The display loader separately checks the
 stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the
 reverse) fails safely instead of streaming into the wrong framebuffer.
 
-Version 0.3.0 supports both panel geometries and tracks changed pixels in
+Version 0.4.0 supports both panel geometries and tracks changed pixels in
 8-pixel column tiles. Runs on a row are merged into one rectangle while the
 gaps between them stay small; wider gaps are split, so unchanged background
 traffic stays bounded. The included TFTs use a fixed 3-second host-inactivity
