@@ -871,6 +871,9 @@ bool NSPanelDisplay::upload_tft_() {
     write_array(end, sizeof end);
     uart_wait_tx_done(port, pdMS_TO_TICKS(1000));
   };
+  // Leave Nextion protocol reparse mode (recmod=1, e.g. Lovelace UI), otherwise no command gets through.
+  command("DRAKJHSUYDGBNCJHGJKSHBDN");
+  command("recmod=0");
   command("sleep=0");
   command("dim=100");
   delay(250);
