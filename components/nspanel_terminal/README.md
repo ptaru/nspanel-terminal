@@ -33,9 +33,10 @@ stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the
 reverse) fails safely instead of streaming into the wrong framebuffer.
 
 Version 0.3.0 supports both panel geometries and tracks changed pixels in
-8-pixel column tiles. Separate runs on a row are streamed as separate rectangles,
-reducing unchanged background traffic. The included TFTs use a fixed 3-second
-host-inactivity watchdog.
+8-pixel column tiles. Runs on a row are merged into one rectangle while the
+gaps between them stay small; wider gaps are split, so unchanged background
+traffic stays bounded. The included TFTs use a fixed 3-second host-inactivity
+watchdog.
 
 The current component services UART records and heartbeats in a task pinned to
 ESP32 core 0. Rendering and API actions remain on the ESPHome main loop. A
@@ -43,11 +44,11 @@ recursive lock protects the framebuffer and session state; queued touch samples
 return to the main loop before entering ESPHome's touchscreen code. The STM
 watchdog remains the recovery path if the transport task itself stops.
 
-When LVGL is present, the display listens for refresh start and ready events. It
-can continue sending an existing rectangle and heartbeats during painting, but
-takes the next framebuffer snapshot only after all flush callbacks in that
-refresh have completed. This keeps one LVGL paint from being split into
-mid-refresh snapshots.
+When LVGL is present, the display tracks refresh start and ready events. It
+holds new framebuffer snapshots from the first flush of a refresh until all
+flush callbacks in that refresh have completed, so one LVGL paint is never
+split into mid-refresh snapshots. The transport can keep sending during
+rendering before the first flush.
 For ESPHome display lambdas and display pages, the component applies the same
 gate around the complete `update()` call. The transport task continues handling
 UART traffic while the writer runs.
