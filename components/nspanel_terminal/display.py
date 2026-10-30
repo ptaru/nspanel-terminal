@@ -1,6 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import display, uart
+from esphome.components.esp32 import include_builtin_idf_component
 from esphome.components.const import BYTE_ORDER_LITTLE
 from esphome.const import (
     CONF_AUTO_CLEAR_ENABLED,
@@ -67,6 +68,7 @@ CONFIG_SCHEMA = cv.All(
 
 
 async def to_code(config):
+    include_builtin_idf_component("esp_http_client")
     uart_parent = await cg.get_variable(config[CONF_UART_ID])
     cg.add(uart_parent.set_tx_buffer_size(2048))
     cg.add(uart_parent.set_rx_full_threshold(32))
