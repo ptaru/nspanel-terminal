@@ -7,6 +7,10 @@
   reports total, refresh, transfer, copy, encode, UART-write, credit-wait and
   DONE-wait timings plus wire utilisation.
 - Wake the ESP32 transport task when reverse UART data arrives, reducing idle gaps during sustained display updates. The EU historical gradient and random workloads improved from about 2.6 s and 9.3 s to 2.22 s and 7.19 s over eight full-screen frames, with unchanged wire content and no transport faults. The TFT receiver is unchanged.
+- Include the `esp_http_client` IDF component, which current ESPHome releases exclude by default, so TFT upload builds on ESP-IDF. (#1)
+- Leave Nextion protocol reparse mode (`recmod=1`) before a TFT upload, so the upload also starts from TFTs that use it, such as the Lovelace UI. (#1)
+- Hold UART snapshots from the first LVGL flush instead of `REFR_START`, so a refresh that renders but changes nothing does not stall the transport. A direct bulk draw outside an LVGL refresh no longer leaves the gate set. (#1)
+- Merge dirty runs on a row while the gaps stay within 16 tiles (128 px), splitting at wider gaps. This keeps the page-switch rectangle reduction without streaming large unchanged spans. (#1)
 
 ## 0.3.0 — 2026-10-29
 
