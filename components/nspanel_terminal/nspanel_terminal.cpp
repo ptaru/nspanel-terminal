@@ -12,6 +12,7 @@
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "nspanel_touchscreen.h"
+#include "dirty_scan.h"
 #ifdef USE_LVGL
 #include <lvgl.h>
 #endif
@@ -422,12 +423,8 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
     if (std::memcmp(source, target, size_t(w) * 2u) == 0) continue;
     // Compare on the same 8-pixel grid as DirtyRows. A wide LVGL flush can
     // contain several independent changes, with unchanged tiles between them.
-    for (int col = x_start / 8; col <= (x_start + w - 1) / 8; ++col) {
-      const int first = std::max(x_start, col * 8) - x_start;
-      const int last = std::min(x_start + w, (col + 1) * 8) - x_start;
-      if (std::memcmp(source + 2 * first, target + 2 * first, size_t(last - first) * 2u) != 0)
-        this->dirty_.mark(x_start + first, y_start + row, last - first);
-    }
+    // The scan replaces one memcmp and one mark per tile with a single pass.
+    this->dirty_.merge(y_start + row, scan_dirty_row(source, target, unsigned(x_start), unsigned(w)));
     std::memcpy(target, source, size_t(w) * 2u);
     ++changed;
   }

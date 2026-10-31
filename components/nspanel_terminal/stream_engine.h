@@ -293,6 +293,10 @@ struct DirtyRows {
     const unsigned last = (std::min<unsigned>(width, x + w) - 1) / TILE;
     rows[y] |= (full >> (columns - (last - first + 1))) << first;
   }
+  // Apply a ready-made tile mask for one row, as returned by scan_dirty_row().
+  void merge(unsigned y, uint64_t mask) {
+    if (y < height) rows[y] |= mask & full;
+  }
   void all() {
     next = 0;
     rows.fill(0);

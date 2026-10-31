@@ -30,5 +30,7 @@ test:
 	./build/check-burst
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_gap_splitter.cpp -o build/check-gap-splitter
 	./build/check-gap-splitter
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_dirty_scan.cpp -o build/check-dirty-scan
+	./build/check-dirty-scan
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_encoding.cpp -o build/check-encoding
 	./build/check-encoding
