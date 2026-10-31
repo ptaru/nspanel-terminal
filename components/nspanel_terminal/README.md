@@ -10,8 +10,8 @@ The component supports the two panel geometries:
 
 | Panel | `width` | `height` | Visible area | Native |
 | --- | ---: | ---: | --- | ---: |
-| EU | 454 (default) | 320 (default) | 454×320 in a 480×320 controller | 92 |
-| US | 320 | 480 | full 320×480 | 92 |
+| EU | 454 (default) | 320 (default) | 454×320 in a 480×320 controller | 93 |
+| US | 320 | 480 | full 320×480 | 93 |
 
 ```yaml
 display:
@@ -27,15 +27,13 @@ display:
 `width` and `height` also set the display metadata used by LVGL. Other sizes
 are rejected. Select the orientation with these values and leave ESPHome's
 `rotation` at 0; the panel's native project already supplies the correct
-orientation. Both modified images report native revision 92, while stock images
-report 72; the component requires 92. The display loader separately checks the
+orientation. The included images report native revision 93; the component also
+accepts revision 92 for protocol 6 compatibility. The display loader checks the
 stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the
 reverse) fails safely instead of streaming into the wrong framebuffer.
 
-Version 0.4.0 supports both panel geometries and tracks changed pixels in
-8-pixel column tiles. Runs on a row are merged into one rectangle while the
-gaps between them stay small; wider gaps are split, so unchanged background
-traffic stays bounded. The included TFTs use a fixed 3-second host-inactivity
+The component tracks changed pixels in 8-pixel column tiles and selects dirty
+rectangles for transmission. The included TFTs use a fixed 3-second host-inactivity
 watchdog.
 
 The current component services UART records and heartbeats in a task pinned to

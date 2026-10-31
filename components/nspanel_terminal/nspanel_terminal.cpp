@@ -72,7 +72,7 @@ void NSPanelDisplay::task_loop_() {
   }
 }
 void NSPanelDisplay::dump_config() {
-  ESP_LOGCONFIG(TAG, "NSPanel protocol6 display, %ux%u RGB565, PSRAM, UART 4 Mbaud", unsigned(width_),
+  ESP_LOGCONFIG(TAG, "NSPanel protocol6/7 display, %ux%u RGB565, PSRAM, UART 4 Mbaud", unsigned(width_),
                 unsigned(height_));
   LOG_UPDATE_INTERVAL(this);
 }
@@ -497,7 +497,7 @@ bool NSPanelDisplay::change_baud_(uint32_t baud) {
 bool NSPanelDisplay::identity_ok_(const char *reply) const {
   // The stock connect reply starts with the model, native version and MCU code:
   // NX4832F035_011C,<native>,61744,... . Our EU and US images both report
-  // native revision 92; stock images report 72. Panel geometry is checked
+  // native revision 92 (protocol 6) or 93 (protocol 7); stock images report 72. Panel geometry is checked
   // separately by the loader through the stock entry dimensions and state.
   static constexpr char MODEL[] = "NX4832F035_011C,";
   const char *field = std::strstr(reply, MODEL);
@@ -509,7 +509,7 @@ bool NSPanelDisplay::identity_ok_(const char *reply) const {
   char *record_end = nullptr;
   const unsigned long record = std::strtoul(end + 1, &record_end, 10);
   if (record_end == end + 1 || *record_end != ',') return false;
-  return version == 92 && record == 61744;
+  return (version == 92 || version == 93) && record == 61744;
 }
 void NSPanelDisplay::service_stream_(int incoming) {
   uint32_t started = micros();
@@ -531,6 +531,9 @@ void NSPanelDisplay::service_stream_(int incoming) {
       ++benchmark_reports_;
       benchmark_highwater_ = std::max(benchmark_highwater_, r.highwater);
     }
+    if (r.status == protocol::READY || r.status == protocol::READY_BRIGHTNESS)
+      ESP_LOGI(TAG, "Protocol %u selected (%s)", stream_.version(),
+               stream_.version() == 7 ? "burst, content aware" : "per-rectangle DONE, gap cap 16");
     if (r.status == protocol::READY_BRIGHTNESS) {
       ESP_LOGI(TAG, "Live brightness capability confirmed");
       if (brightness_selected_) stream_.request_brightness(brightness_percent_);
@@ -658,24 +661,28 @@ void NSPanelDisplay::service_stream_(int incoming) {
       submit_ms_ = millis();
     }
   }
-  if (stream_.idle() && !benchmark_active_ && !exit_requested_ && !refresh_active_ && !render_wait_refresh_) {
-    unsigned x, y, w, h;
-    if (dirty_.take(x, y, w, h)) {
-      const uint32_t copy_started = render_repeat_active_ ? micros() : 0;
-      for (unsigned row = 0; row < h; row++)
-        std::memcpy(snapshot_ + 2 * row * w, buffer_ + 2 * ((y + row) * width_ + x), 2 * w);
-      if (render_repeat_active_) render_stats_.copy_us += micros() - copy_started;
-      if (!stream_.submit(x, y, w, h, snapshot_, millis())) {
-        dirty_.all();
-        fail_("rectangle submit");
-        return;
-      }
-      submit_ms_ = millis();
-      if (measurement_active_ && !measurement_first_submit_us_) measurement_first_submit_us_ = micros();
-      trace_(4, uint16_t(w), uint16_t(h), uint16_t(x), uint16_t(y));
-    }
-  }
   do {
+    if (stream_.can_submit() && !benchmark_active_ && (!exit_requested_ || !stream_.idle()) &&
+        !refresh_active_ && !render_wait_refresh_) {
+      unsigned x, y, w, h;
+      const bool have_rectangle = stream_.version() == 7 ? dirty_.take_adaptive(x, y, w, h, buffer_)
+                                                         : dirty_.take(x, y, w, h);
+      if (have_rectangle) {
+        const uint32_t copy_started = render_repeat_active_ ? micros() : 0;
+        for (unsigned row = 0; row < h; row++)
+          std::memcpy(snapshot_ + 2 * row * w, buffer_ + 2 * ((y + row) * width_ + x), 2 * w);
+        if (render_repeat_active_) render_stats_.copy_us += micros() - copy_started;
+        if (!stream_.submit(x, y, w, h, snapshot_, millis(),
+                            dirty_.empty() || stream_.burst_rectangles() >= 255)) {
+          dirty_.all();
+          fail_("rectangle submit");
+          return;
+        }
+        submit_ms_ = millis();
+        if (measurement_active_ && !measurement_first_submit_us_) measurement_first_submit_us_ = micros();
+        trace_(4, uint16_t(w), uint16_t(h), uint16_t(x), uint16_t(y));
+      }
+    }
     if (benchmark_legacy_) ++benchmark_service_calls_;
     if (render_wait_refresh_) {
       // No frame is pending yet; keep the reverse timeout fresh without
@@ -1248,7 +1255,7 @@ void NSPanelDisplay::loop() {
           ESP_LOGE(TAG, "Restored identity mismatch");
           startup_retry_ = false;
         } else
-          ESP_LOGI(TAG, "Verified native92, baud, saved registers and page after exit");
+          ESP_LOGI(TAG, "Verified terminal identity, baud, saved registers and page after exit");
         finish_recovery_();
       } else if (overdue) {
         ESP_LOGE(TAG, "Restored identity timeout");

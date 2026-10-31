@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * NSPanel protocol-6 terminal receiver with live brightness.
+ * NSPanel protocol-7 terminal receiver with burst completion and live brightness.
  *
  * This is the RAM overlay that runs while the stock Nextion UI is suspended.
  * It is copied by terminal_loader.c to 0x20000900 and entered at
@@ -82,7 +82,7 @@ static unsigned report(const StreamPackBits *s, unsigned status,
   uint16_t f[16];
   uint8_t *p = (uint8_t *)f;
   f[0] = 0x5253; /* 'S' 'R' */
-  p[2] = 6;
+  p[2] = 7;
   p[3] = status;
   f[2] = s->session;
   f[3] = s->seq;

@@ -56,12 +56,13 @@ inline std::vector<uint8_t> cobs(const std::vector<uint8_t> &raw) {
   return out;
 }
 inline std::vector<uint8_t> record(unsigned session, unsigned seq, unsigned kind, unsigned x = 0, unsigned y = 0,
-                                   unsigned w = 0, unsigned h = 0, const std::vector<uint8_t> &body = {}) {
+                                   unsigned w = 0, unsigned h = 0, const std::vector<uint8_t> &body = {},
+                                   unsigned version = 6) {
   if (body.size() > PAYLOAD) return {};
   std::vector<uint8_t> b(20);
   b[0] = 'R';
   b[1] = 'S';
-  b[2] = 6;
+  b[2] = uint8_t(version);
   b[3] = uint8_t(kind);
   put16(b, 4, session);
   put16(b, 6, seq);
@@ -169,12 +170,12 @@ class Encoder {
 /* Reuse both staging buffers rather than allocating header/body/COBS storage
  * for every DATA record. Generic control records keep the small helper above. */
 inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_t> &body, std::vector<uint8_t> &raw,
-                        std::vector<uint8_t> &out) {
+                        std::vector<uint8_t> &out, unsigned version = 6) {
   raw.assign(20, 0);
   raw.reserve(534);
   raw[0] = 'R';
   raw[1] = 'S';
-  raw[2] = 6;
+  raw[2] = uint8_t(version);
   raw[3] = DATA;
   put16(raw, 4, session);
   put16(raw, 6, seq);
@@ -210,13 +211,15 @@ inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_
 }
 constexpr unsigned RESPONSE = 32;
 struct Reply {
-  unsigned status = 0, seq = 0, rectangles = 0, flags = 0, mask = 0, freshness = 0, x = 0, y = 0, highwater = 0;
+  unsigned version = 0, status = 0, seq = 0, rectangles = 0, flags = 0, mask = 0, freshness = 0, x = 0, y = 0, highwater = 0;
   uint32_t consumed = 0;
 };
 inline bool reply(const uint8_t *p, unsigned session, Reply &r) {
-  if (p[0] != 'S' || p[1] != 'R' || p[2] != 6 || get16(p + 4) != session || get16(p + 26) != WINDOW ||
+  if (p[0] != 'S' || p[1] != 'R' || (p[2] != 6 && p[2] != 7) || get16(p + 4) != session ||
+      get16(p + 26) != WINDOW ||
       crc(p, 30) != get16(p + 30))
     return false;
+  r.version = p[2];
   r.status = p[3];
   r.seq = get16(p + 6);
   r.consumed = get32(p + 8);

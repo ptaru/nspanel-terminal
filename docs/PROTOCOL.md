@@ -8,7 +8,7 @@ terminal (EU landscape or US portrait). It is implemented by
 contract.
 
 The ESP32 owns the display UART during a session. The terminal accepts
-COBS-framed protocol-6 records with a session, sequence number and CRC16, and
+COBS-framed protocol-7 records with a session, sequence number and CRC16, and
 answers with 32-byte reverse reports. Pixels are PackBits-compressed RGB565
 rectangles; there is no framebuffer on the display.
 
@@ -53,7 +53,7 @@ The decoded header is exactly 20 bytes. All integers are little endian.
 | Offset | Size | Field |
 | --- | ---: | --- |
 | 0..1 | 2 | `R` `S` magic |
-| 2 | 1 | Protocol version, **6** |
+| 2 | 1 | Protocol version, **7** |
 | 3 | 1 | Kind (see below) |
 | 4..5 | 2 | Session id, nonzero |
 | 6..7 | 2 | Sequence, modulo 65536 |
@@ -74,7 +74,7 @@ and semantic checks must pass before any body bytes can reach the LCD.
 | ---: | --- | --- | --- | --- |
 | 1 | `RECT` | none | `x,y,w,h` | Configure the LCD window and begin a rectangle. |
 | 2 | `DATA` | 1..512 | zero | PackBits pixels for the active rectangle. |
-| 3 | `END` | none | zero | Finish the rectangle; all pixel bytes must have been emitted. |
+| 3 | `END` | none | `x=0..1`, other fields zero | Finish the rectangle; `x=1` also closes the burst and requests DONE. |
 | 4 | `PING` | none | zero | Keep an idle session alive. |
 | 5 | `EXIT` | none | zero | Return to the stock runtime. |
 | 6 | `SYNC` | none | zero | Clear a protocol fault and abandon the active rectangle. |
@@ -87,7 +87,7 @@ Validation rules:
   `h <= H - y`, where `W×H` is 454×320 (EU) or 320×480 (US).
 - `DATA` requires an active rectangle and a nonzero body. Its body must decode
   to a whole number of pixels; an incomplete PackBits token is an error.
-- `END` requires an active rectangle and exactly zero remaining pixel bytes.
+- `END` requires an active rectangle, exactly zero remaining pixel bytes, `x=0..1` and zero `y/w/h`. `x=0` continues the burst; `x=1` requests DONE.
 - `PING`, `EXIT` and `SYNC` require no body and zero geometry.
 - `BRIGHTNESS` requires no active rectangle, no body, zero `y/w/h` and
   `x <= 100`.
@@ -149,7 +149,7 @@ A report is 32 unescaped bytes:
 | Offset | Size | Field |
 | --- | ---: | --- |
 | 0..1 | 2 | `S` `R` magic |
-| 2 | 1 | Protocol version, 6 |
+| 2 | 1 | Protocol version, 7 |
 | 3 | 1 | Status (see below) |
 | 4..5 | 2 | Session id |
 | 6..7 | 2 | Next expected sequence |
@@ -174,7 +174,7 @@ Status values:
 | 130 | `PROGRESS` | Credit/touch update. |
 | 131 | `ERROR` | Protocol or hardware fault. |
 | 132 | `SYNCED` | Fault cleared after `SYNC`. |
-| 133 | `DONE` | A rectangle completed. |
+| 133 | `DONE` | A burst completed; the counter includes every rectangle in it. |
 | 134 | `READY_BRIGHTNESS` | This terminal; live brightness supported. |
 | 135 | `BRIGHTNESS_DONE` | Brightness applied. |
 
@@ -199,7 +199,7 @@ reported consumed offset. The count includes COBS code bytes and delimiters.
 The terminal publishes credits:
 
 - approximately every 256 consumed bytes;
-- on any record event, including `SYNC`, `END`, `EXIT`, an error or a
+- on any record event, including `SYNC`, final `END`, `EXIT`, an error or a
   brightness acknowledgement;
 - when a fresh touch report is available.
 
@@ -227,7 +227,7 @@ not an acknowledgement of a whole block.
 
 ## Compatibility
 
-- Protocol version 6 is tied to our native revision 92 on both panel profiles.
+- Protocol version 7 is tied to our native revision 93 on both panel profiles.
   Stock images report 72 and are rejected by the component. Panel geometry is
   selected by `width`/`height` and checked separately by the display loader, not
   inferred from the native version. Do not mix a component and TFT from
@@ -240,3 +240,27 @@ not an acknowledgement of a whole block.
 - The display UART must be owned exclusively by `nspanel_terminal` during a
   session. Do not configure ESPHome's separate `nextion` component on the same
   UART.
+
+## Bursts and host compatibility
+
+The host selects the wire version from READY. Native 92 / protocol 6 keeps
+per-rectangle DONE and the 16-tile gap cap. Native 93 / protocol 7 sends
+consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group.
+Only the final END emits DONE. PROGRESS byte credits and touch reports continue
+throughout; the 512-byte window and 1 KiB DMA ring are unchanged.
+
+The production sender closes a burst when its dirty map drains or after 256
+rectangles, so ongoing drawing cannot postpone acknowledgements indefinitely.
+New drawing remains dirty if it arrives after a rectangle is copied. The host
+reuses its strip snapshot only after that rectangle's END has been queued in
+full. The 8-pixel tile granularity can still include unchanged pixels inside
+a dirty tile.
+
+DONE must match the expected cumulative rectangle count, modulo 65536. A
+protocol error in a multi-rectangle burst stops the session and marks the whole
+display dirty for recovery; earlier snapshots may already have been reused. A
+single-rectangle burst retains the existing bounded SYNC/retry path. These
+completion semantics do not provide atomic or tear-free display updates.
+
+Update the host before the TFT: the new host supports both wire versions; an
+old host rejects protocol 7. Native 93 packages require the matching host.

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 — 2026-10-31
+
+- Add protocol 7 and native 93 TFTs with burst completion and live brightness.
+- Improve dirty-rectangle selection and retain protocol 6 compatibility.
+- Add portable protocol and rectangle coverage checks.
+- Load the component from the tagged GitHub release in both examples, so they
+  no longer assume a local checkout.
+
 ## 0.4.0 — 2026-10-30
 
 - Add a `run_render_benchmark` diagnostic action. It forces one or more

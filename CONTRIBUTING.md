@@ -61,6 +61,13 @@ build are not hardware-validated just because they compile. Before uploading:
 See [recovery](docs/RECOVERY.md). The panel is mains-powered; follow the safety
 guidance and do not open it unless qualified.
 
+## Releases
+
+Tag releases with `vX.Y.Z` on a commit whose `CHANGELOG.md` has a matching
+`## X.Y.Z` section. Pushing the tag runs the release workflow, which creates the
+GitHub release from that section; the examples pin the same tag. Do not move a
+published tag.
+
 ## Licensing
 
 Repository code and the native source are MIT licensed (see [LICENSE](LICENSE)).

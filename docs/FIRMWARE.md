@@ -1,5 +1,6 @@
 # Display firmware internals
 
+
 This document describes the native firmware that runs on the display side of the
 NSPanel. It is for developers who want to understand, audit, modify or rebuild
 the shipped TFT. For installation, use the [main README](../README.md); for the
@@ -20,21 +21,21 @@ build commands, see [building](BUILDING.md); for the wire format, see
 | Orientation | landscape | portrait |
 | Visible area | 454×320 inside a 480×320 controller | full 320×480 |
 | Stock entry state | `0x20000101 == 2` | `0x20000101 == 1` |
-| Native terminal | protocol 6, native 92 | protocol 6, native 92 |
+| Native terminal | protocol 7, native 93 | protocol 7, native 93 |
 | Base native version | 72 | 72 (unmodified blank exports) |
 | Shipped TFT | [`firmware/terminal-eu.tft`](../firmware/terminal-eu.tft), 264,936 bytes | [`firmware/terminal-us.tft`](../firmware/terminal-us.tft), 264,984 bytes |
-| Shipped SHA-256 | `a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c` | `512aa5bca9966352d21d324f0d12c3e3e607f49dcb7a9018044145a495b1d74e` |
+| Shipped SHA-256 | `925b0f35109e72354816a96d9af0b07cc9f92beaf1aed3ba576a2424b3c0ae3c` | `20ba711b65e58febac29f758ea2724a2f71b9202c028a4e45abef64ca404e73c` |
 | Build input | [`firmware/base-eu.tft`](../firmware/base-eu.tft), SHA-256 `6314294af0822bfe1616d2f28ba4e81b15038a20b53abedd0f9aafacb64994ef` | [`firmware/base-us.tft`](../firmware/base-us.tft), SHA-256 `f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c` |
 | Source | [`firmware/src/`](../firmware/src/) | same |
-| Program size | 3,232 of 3,568 available bytes | 3,232 of 3,568 available bytes |
-| Loader size | 300 of 844 bytes | 296 of 844 bytes |
+| Program size | 3,276 of 3,568 available bytes | 3,276 of 3,568 available bytes |
+| Loader size | 292 of 844 bytes | 288 of 844 bytes |
 | Watchdog | 3,000 ms of host silence | same |
 | Live brightness | 0–100%, applied between rectangles, status 135 | same |
 
 Both bases are unmodified 72 blank exports (the EU Editor export and the stock
 US export). Each shipped image differs in
 the 4 KiB terminal preamble, helper 0, the native version metadata, and the
-package checksums. The EU image additionally applies the earlier EU native
+package checksums. The EU image additionally applies EU native
 patches (state, dim and baud handling). The UI assets are unchanged.
 
 ## What the firmware modification changes
@@ -46,25 +47,25 @@ project's RAM pool as a direct rectangle receiver.
 
 The builder changes these regions in the selected base TFT:
 
-1. **Preamble at file offset `0x1000`.** The first 3,232 bytes become the
+1. **Preamble at file offset `0x1000`.** The first 3,276 bytes become the
    compiled terminal program; the rest of the 4 KiB region is `0xFF`. This
    region maps to external SPI address `0x11000`.
 2. **Helper 0 at bundle offset `0x357B6 + 0x74`.** The 844-byte helper-0 slot
-   becomes the 300-byte EU loader or 296-byte US loader, padded with `0xFF`.
+   becomes the 292-byte EU loader or 288-byte US loader, padded with `0xFF`.
 3. **Helper-0 CRC** in the helper-0 entry at `0x357B6 + 0x10` and the enclosing
    helper bundle CRC at `0x357B6`.
 4. **EU native patches** at `0x2439`, `0xC072`, `0xD134`/`0xD158` and
-   `0xEB0C`/`0xEB10`. These carry the earlier EU state, dim and baud handling
-   onto the stock 72 native image. The US profile has no native code patches.
+   `0xEB0C`/`0xEB10`. These provide EU state, dim and baud handling
+   in the native image. The US profile has no native code patches.
 5. **Native version metadata** at native offset `0xB8`, plus its two CRCs at
-   `0xB4` and `0xBE`. Both bases report 72; both shipped images report 92.
+   `0xB4` and `0xBE`. Both bases report 72; both shipped images report 93.
 6. **Package CRCs** that cover the file: resource allocation, header 1 and the
    whole-file final word.
 
 Apart from those regions, the page/font/picture tables, encoded headers,
 helpers 1–8 and the stock updater are preserved. The builder enforces this with
-a patch-region whitelist; the shipped builds change 4,102 bytes (EU) and
-4,083 bytes (US). The terminal can therefore return to the stock blank page, and
+a patch-region whitelist; the shipped builds change 4,154 bytes (EU) and
+4,127 bytes (US). The terminal can therefore return to the stock blank page, and
 TFT updates use the stock Nextion updater.
 
 The source does **not** create a standalone display firmware. It is an overlay
@@ -85,7 +86,7 @@ ESP32 (ESPHome)                         Display MCU (STM32-class)
 ```
 
 The ESP32 owns the display UART during a session. It sends COBS-framed
-protocol-6 records at 2 or 4 Mbaud and consumes 32-byte reverse reports. The
+protocol-7 records at 2 or 4 Mbaud and consumes 32-byte reverse reports. The
 display writes pixels directly to the LCD through GPIO; there is no framebuffer
 and no rectangle-sized decompression buffer on the display side.
 
@@ -102,19 +103,19 @@ the US file is 264,984 bytes, so the last four bytes move accordingly.
 | File offset | Size | Contents |
 | --- | ---: | --- |
 | `0x0000` | 0x1000 | Container headers, identity, CRCs and native bundle table. |
-| `0x1000` | 0x1000 | Terminal preamble. First 3,232 bytes are code; remainder `0xFF`. Maps to SPI `0x11000`. |
+| `0x1000` | 0x1000 | Terminal preamble. First 3,276 bytes are code; remainder `0xFF`. Maps to SPI `0x11000`. |
 | `0x10000` | 0x30000 | Resource allocation (fonts, pictures, project data). Unchanged. |
 | `0x14532` | — | Native bundle start. First record follows a 4-byte count. |
 | `0x14566` | 60,352 | Encoded F130 native image (XOR 9 on disk). The EU profile applies native patches; both profiles update the version metadata. |
 | `0x357B6` | 0x15E0 | Helper bundle: enclosing CRC, count, nine entries. Helper 0 starts at `+0x74`. |
-| `0x357B6 + 0x74` | 844 | Helper 0 slot: EU 300-byte or US 296-byte loader plus `0xFF` padding. |
+| `0x357B6 + 0x74` | 844 | Helper 0 slot: EU 292-byte or US 288-byte loader plus `0xFF` padding. |
 | last 4 bytes | 4 | Whole-file CRC word. |
 
-Both bases report native version 72 and both shipped images report 92 at record
+Both bases report native version 72 and both shipped images report 93 at record
 offset `0xB8`. The full-XOR image SHA-256 is
-`be6ef7a50c901d1c8135387e502553f7ad295223c967cdaf2ca564b8251f3d79` for the EU
+`f70971a29a93af36379f5a4c7a142ef487f2052b1885cc9d60b51d68ecb4180f` for the EU
 image and
-`b8ee56812e8aa92e653ba5f46a5745726295451f58a658b993bcf0ae5aaff4fb` for the US
+`9d7072e8a4bbccc616ed973cea298d5f7b4a3196b211e848720d1bc6e9b0f205` for the US
 image. [`tools/verify_tft.py`](../tools/verify_tft.py) checks the profile-specific
 values.
 
@@ -177,7 +178,7 @@ the stock runtime.
 | `0x20000000..0x200004F0` | 1,264 | Stock globals, touch cache, callback tables. Partly reused; preserved values are restored. |
 | `0x200004F0..0x200008F0` | 1,024 | UART command buffer, used as the DMA ring. |
 | `0x200008F0..0x200016F0` | 3,584 | Project variable pool. `sys0..2` occupy the first 16 bytes; the program starts at `0x20000900`. |
-| `0x20000900..0x200016F0` | 3,568 | Terminal program (3,232 used in both profiles, 336 spare). |
+| `0x20000900..0x200016F0` | 3,568 | Terminal program (3,276 used in both profiles, 292 spare). |
 | `0x200016F0..0x20001A74` | 900 | Shared graphics/project/helper scratch. The loader itself is loaded here. |
 | `0x20001B1C` | — | Stock stack canary. Initial main SP is `0x20001F98`. |
 
@@ -309,7 +310,7 @@ byte-for-byte gates for the two official images.
 - **Base image.** The patch is tied to the selected profile base and helper
   bundle. Do not substitute a TFT from a newer Nextion Editor or another MCU
   code; add a profile with its own geometry and native version instead.
-- **Versioning.** `92` identifies our terminal revision on both panel profiles.
+- **Versioning.** `93` identifies our terminal revision on both panel profiles.
   A changed package must get a new version because the stock updater skips a
   valid image with the same version. Stock images report `72`.
 - **Tests.** At minimum run `tools/build_tft.py --panel eu --check`,
@@ -339,7 +340,7 @@ byte-for-byte gates for the two official images.
 | [`panel_profile.h`](../firmware/src/panel_profile.h) | Compile-time EU/US visible and stock-entry geometry. |
 | [`terminal_api.h`](../firmware/src/terminal_api.h) | Register addresses, stock entry points, touch report structure. |
 | [`terminal_receiver.c`](../firmware/src/terminal_receiver.c) | Main receiver, entry/exit, reports, watchdog. |
-| [`stream_protocol.h`](../firmware/src/stream_protocol.h) | Protocol-6 decoder, PackBits, brightness record. |
+| [`stream_protocol.h`](../firmware/src/stream_protocol.h) | Protocol-7 decoder, PackBits, brightness record. |
 | [`stream_touch.h`](../firmware/src/stream_touch.h) | Goodix bit-banged I2C and polling. |
 | [`terminal_loader.c`](../firmware/src/terminal_loader.c) | Helper-0 loader and restoration. |
 | [`tools/build_tft.py`](../tools/build_tft.py) | Compiler, fixed-address assembler and TFT patcher. |

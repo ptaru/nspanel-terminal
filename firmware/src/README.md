@@ -1,6 +1,6 @@
 # Native display source
 
-This directory contains the C source for the NSPanel protocol-6 terminal that runs
+This directory contains the C source for the NSPanel protocol-7 terminal that runs
 inside the display's helper overlay. It builds both the EU
 [`../terminal-eu.tft`](../terminal-eu.tft) and the US
 [`../terminal-us.tft`](../terminal-us.tft) through
@@ -11,7 +11,7 @@ inside the display's helper overlay. It builds both the EU
 | `panel_profile.h` | Compile-time panel geometry. Defaults to the EU layout; the builder overrides it for the US profile. |
 | `terminal_api.h` | Fixed USART/DMA/GPIO addresses, the stock baud setter and the touch-report structure. |
 | `terminal_receiver.c` | Entry point, UART/DMA setup, stream loop, touch scheduling, reverse reports, watchdog and exit restoration. |
-| `stream_protocol.h` | Protocol-6 COBS/PackBits decoder, header validation and the live-brightness record. |
+| `stream_protocol.h` | Protocol-7 COBS/PackBits decoder, header validation and the live-brightness record. |
 | `stream_touch.h` | GPIO bit-banged I2C and Goodix polling. |
 | `terminal_loader.c` | Helper-0 loader: copy, CRC check, call the overlay, restore the stock runtime. |
 
@@ -30,9 +30,9 @@ because it must match the compiled program exactly.
 | Stock entry state | 2 | 1 |
 | Base native version | 72 | 72 |
 | Native code patches | 7 | 0 |
-| Shipped native version | 92 | 92 |
+| Shipped native version | 93 | 93 |
 | Build profile | `--panel eu` | `--panel us` |
-| Protocol | 6 | 6 |
+| Protocol | 7 | 7 |
 | Program load address | `0x20000900` (entry `0x20000901`) | same |
 | Program limit | `0x200016F0 - 0x20000900` = 3,568 bytes | same |
 | Loader load address | `0x200016F0` | same |
@@ -45,9 +45,9 @@ The source is specific to these base TFTs and this display family. The stock
 runtime addresses it calls are not portable to another Nextion editor version,
 another MCU code or NSPanel Pro. Both bases are unmodified 72 blank exports
 (the EU Editor export and the stock US export). The EU profile applies seven
-earlier EU native patches (state, dim and
+EU native patches (state, dim and
 baud handling); the US profile leaves the stock US native code alone. Both
-profiles set the native version to 92 and repair its metadata CRCs. Both bases
+profiles set the native version to 93 and repair its metadata CRCs. Both bases
 use the same container offsets and load addresses.
 
 ## Build

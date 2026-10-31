@@ -1,5 +1,8 @@
 # NSPanel terminal
 
+Release 0.5.0.
+
+
 Turn an EU or US Sonoff NSPanel into a general-purpose ESPHome display and
 touchscreen. ESPHome draws the interface on the ESP32 and sends it to the
 panel's screen over the internal serial link. The supplied display image
@@ -9,12 +12,12 @@ targets the NSPanel display `NX4832F035_011C` (MCU code F130), not NSPanel Pro.
 
 | Panel | Orientation | Screen size | Firmware version | Image to install | SHA-256 |
 | --- | --- | --- | ---: | --- | --- |
-| EU | landscape | 454×320 in a 480×320 controller | 92 | `firmware/terminal-eu.tft` | `a25aafc2…8a3d10c` |
-| US | portrait | 320×480 | 92 | `firmware/terminal-us.tft` | `512aa5bc…b1d74e` |
+| EU | landscape | 454×320 in a 480×320 controller | 93 | `firmware/terminal-eu.tft` | `925b0f35…3c0ae3c` |
+| US | portrait | 320×480 | 93 | `firmware/terminal-us.tft` | `20ba711b…404e73c` |
 
-Both modified images report native revision 92. Both retained bases are
+Both terminal images report native revision 93. Both retained bases are
 unmodified 72 exports (the EU Editor export and the stock US export); the EU
-build applies the earlier EU native patches, while the US build leaves the
+build applies EU native patches, while the US build leaves the
 stock US native code alone. Panel geometry is
 selected by `width`/`height` and checked by the display loader, not inferred
 from the version.
@@ -26,8 +29,7 @@ page after about three seconds, so a crashed or disconnected host does not leave
 the screen frozen.
 
 The EU image has been tested on a real EU panel. The US image is built from the
-stock US image and validated offline (package structure, checksums and receiver
-emulation); it has not been run on US hardware yet. Treat it as experimental and
+stock US image and validated offline (package structure and checksums); it has not been run on US hardware yet. Treat it as experimental and
 keep the original US image for rollback.
 
 The display firmware source is included in [`firmware/src/`](firmware/src/) and
@@ -48,12 +50,13 @@ builds both images from the original Sonoff images. See
    python3 tools/verify_tft.py --panel us firmware/terminal-us.tft
    ```
 
-4. Flash `examples/panel.yaml` for the EU panel or `examples/panel-us.yaml` for the US panel — USB serial for the first installation, or OTA if the current firmware is reachable. Both load the component from this checkout and expose `upload_tft`.
+4. Flash `examples/panel.yaml` for the EU panel or `examples/panel-us.yaml` for the US panel — USB serial for the first installation, or OTA if the current firmware is reachable. Both load the component from the `v0.5.0` tag on GitHub and expose `upload_tft`, so no local checkout is needed.
 5. Call `upload_tft`. The component stops the terminal, installs the TFT from `tft_url`, and restarts the display. Wait for completion, then verify that the ESPHome UI renders and touch works.
 
 The sample configurations use the NSPanel GPIO pins and PSRAM wiring. Review them
-before installing, especially if your board differs. Use the TFT and component
-from the same checkout, and select the matching panel geometry:
+before installing, especially if your board differs. Keep the component and the
+TFT from the same release (`v0.5.0`; use the `main` branch for development) and
+select the matching panel geometry:
 
 ```yaml
 display:

@@ -12,13 +12,13 @@ device.
 
 | Profile | Panel | Visible area | Base native | Native patches | Shipped native | Base | Shipped |
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
-| `eu` | EU landscape | 454×320 in a 480×320 controller | 72 | 7 | 92 | `firmware/base-eu.tft` | `firmware/terminal-eu.tft` |
-| `us` | US portrait | 320×480 | 72 | 0 | 92 | `firmware/base-us.tft` | `firmware/terminal-us.tft` |
+| `eu` | EU landscape | 454×320 in a 480×320 controller | 72 | 7 | 93 | `firmware/base-eu.tft` | `firmware/terminal-eu.tft` |
+| `us` | US portrait | 320×480 | 72 | 0 | 93 | `firmware/base-us.tft` | `firmware/terminal-us.tft` |
 
 Both bases are unmodified 72 blank exports (the EU Editor export and the stock
 US export). The EU profile applies the
-earlier EU native patches (state, dim and baud handling); the US profile has no
-native code patches. Both profiles set the native version metadata to 92 and
+EU native patches (state, dim and baud handling); the US profile has no
+native code patches. Both profiles set the native version metadata to 93 and
 repair its two CRCs. The two bases share the same container offsets, native
 bundle location and helper-0 slot, but each profile is tied to its own base
 SHA-256.
@@ -73,10 +73,10 @@ Expected EU output:
 ```text
 wrote .../build/terminal-eu.tft
   panel   : eu (454x320)
-  SHA-256 : a25aafc263b8980e1f91e9bfe6f363d2197c657bb5a2231f86d61a9828a3d10c
-  program : 3232 / 3568 bytes
-  loader  : 300 / 844 bytes
-  changed : 4102 bytes
+  SHA-256 : 925b0f35109e72354816a96d9af0b07cc9f92beaf1aed3ba576a2424b3c0ae3c
+  program : 3276 / 3568 bytes
+  loader  : 292 / 844 bytes
+  changed : 4154 bytes
   check   : byte-for-byte match with firmware/terminal-eu.tft
 ```
 
@@ -85,10 +85,10 @@ Expected US output:
 ```text
 wrote .../build/terminal-us.tft
   panel   : us (320x480)
-  SHA-256 : 512aa5bca9966352d21d324f0d12c3e3e607f49dcb7a9018044145a495b1d74e
-  program : 3232 / 3568 bytes
-  loader  : 296 / 844 bytes
-  changed : 4083 bytes
+  SHA-256 : 20ba711b65e58febac29f758ea2724a2f71b9202c028a4e45abef64ca404e73c
+  program : 3276 / 3568 bytes
+  loader  : 288 / 844 bytes
+  changed : 4127 bytes
   check   : byte-for-byte match with firmware/terminal-us.tft
 ```
 
@@ -175,7 +175,7 @@ by SHA-256. A TFT from a newer Nextion Editor has a different F130 image, helper
 bundle and page format; patching it would be a port, and it needs a new profile
 with its own geometry and native version.
 
-`92` is our terminal revision for both panel profiles. A changed package must
+`93` is the terminal revision for both panel profiles. A changed package must
 be given a new version because the stock updater skips a valid image with the
 same version. Stock images report `72`.
 

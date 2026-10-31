@@ -5,7 +5,7 @@
 #include "panel_profile.h"
 
 /*
- * Protocol 6 receiver: COBS-delimited records, a 20-byte header, a body of at
+ * Protocol 7 receiver: COBS-delimited records, a 20-byte header, a body of at
  * most 512 bytes and a uint16 trailer CRC. The receiver validates the header
  * and sequence before any body can reach the LCD, then streams a PackBits
  * RGB565 body directly to the panel. See docs/PROTOCOL.md for the wire format.
@@ -14,14 +14,14 @@
  *   STREAM_WINDOW(x, y, w, h)  set the LCD window before a rectangle
  *   STREAM_BYTE(b)             write one pixel byte (RGB565, high byte first)
  *
- * Protocol 6 headers (little endian):
+ * Protocol 7 headers (little endian):
  *   0..1   'R' 'S'
- *   2      protocol version, 6
+ *   2      protocol version, 7
  *   3      kind: RECT=1, DATA=2, END=3, PING=4, EXIT=5, SYNC=6, BRIGHTNESS=7
  *   4..5   session
  *   6..7   sequence modulo 65536
  *   8..9   body length (0..512)
- *   10..17 geometry: x, y, width, height (uint16 each)
+ *   10..17 geometry: x, y, width, height (uint16 each); END.x=1 closes a burst
  *   18..19 header CRC16-CCITT over bytes 0..17, initial 0xffff
  *
  * The body is followed by a CRC16-CCITT over the header and body, initial
@@ -122,7 +122,7 @@ static unsigned stream_header_ok(StreamPackBits *s) {
   unsigned k = p[3], n = stream_u16(p + 8);
   unsigned x = stream_u16(p + 10), y = stream_u16(p + 12);
   unsigned w = stream_u16(p + 14), h = stream_u16(p + 16);
-  if (p[0] != 'R' || p[1] != 'S' || p[2] != 6 || stream_u16(p + 4) != s->session ||
+  if (p[0] != 'R' || p[1] != 'S' || p[2] != 7 || stream_u16(p + 4) != s->session ||
       n > STREAM_PAYLOAD)
     return 0;
   if (k != STREAM_SYNC && (s->fault || stream_u16(p + 6) != s->seq)) return 0;
@@ -130,11 +130,12 @@ static unsigned stream_header_ok(StreamPackBits *s) {
     return !s->active && !n && w && h && x < NSPANEL_PANEL_WIDTH &&
            y < NSPANEL_PANEL_HEIGHT && w <= NSPANEL_PANEL_WIDTH - x &&
            h <= NSPANEL_PANEL_HEIGHT - y;
+  if (k == STREAM_END)
+    return s->active && !s->remaining && !n && x <= 1 && !y && !w && !h;
   if (k == STREAM_BRIGHTNESS) return !s->active && !n && x <= 100 && !y && !w && !h;
   if (x || y || w || h) return 0;
   if (k == STREAM_DATA) return s->active && n;
   if (n) return 0;
-  if (k == STREAM_END) return s->active && !s->remaining;
   return k == STREAM_PING || k == STREAM_EXIT || k == STREAM_SYNC;
 }
 
@@ -239,7 +240,7 @@ static unsigned stream_feed(StreamPackBits *s, uint8_t b) {
     } else if (k == STREAM_END) {
       s->active = 0;
       ++s->rectangles;
-      event = STREAM_DONE;
+      if (stream_u16(s->head + 10)) event = STREAM_DONE;
     } else if (k == STREAM_EXIT) {
       event = STREAM_BYE;
     } else if (k == STREAM_BRIGHTNESS) {

@@ -21,3 +21,12 @@ verify: check
 
 clean:
 	rm -rf build
+
+# Portable sender/receiver integration and sparse-run checks.
+.PHONY: test
+test:
+	mkdir -p build
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_burst.cpp -o build/check-burst
+	./build/check-burst
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_gap_splitter.cpp -o build/check-gap-splitter
+	./build/check-gap-splitter

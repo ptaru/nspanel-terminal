@@ -2,12 +2,13 @@
 #include <optional>
 
 #include "protocol.h"
+#include "gap_splitter.h"
 
 namespace esphome::nspanel_terminal {
 // Platform-independent transport. No waits, UART calls or borrowed LVGL buffers.
 class StreamEngine {
  public:
-  enum class Stage { READY, IDLE, RECT, DATA, END, DONE, SYNC, SYNCED, BRIGHTNESS_ACK, EXIT, BYE, STOPPED, FAILED };
+  enum class Stage { READY, IDLE, RECT, DATA, END, BETWEEN, DONE, SYNC, SYNCED, BRIGHTNESS_ACK, EXIT, BYE, STOPPED, FAILED };
   struct Pixels {
     const uint8_t *data;
     uint16_t operator()(unsigned i) const { return protocol::get16(data + 2 * i); }
@@ -20,10 +21,13 @@ class StreamEngine {
     stage_ = Stage::READY;
     last_report_ = last_wire_ = now;
   }
-  bool submit(unsigned x, unsigned y, unsigned w, unsigned h, const uint8_t *snapshot, uint32_t now) {
-    if (stage_ != Stage::IDLE || !snapshot || !w || !h || x >= width_ || y >= height_ || w > width_ - x ||
+  bool submit(unsigned x, unsigned y, unsigned w, unsigned h, const uint8_t *snapshot, uint32_t now,
+              bool final = true) {
+    if (!can_submit() || !snapshot || !w || !h || x >= width_ || y >= height_ || w > width_ - x ||
         h > height_ - y)
       return false;
+    final_ = version_ == 6 || final;
+    ++burst_rects_;
     x_ = x;
     y_ = y;
     w_ = w;
@@ -61,16 +65,16 @@ class StreamEngine {
           last_report_ = now;
           prepare(now);
         } else if (brightness_pending_) {
-          tx_ = protocol::record(session_, seq_++, protocol::BRIGHTNESS, brightness_percent_);
+          tx_ = protocol::record(session_, seq_++, protocol::BRIGHTNESS, brightness_percent_, 0, 0, 0, {}, version_);
           brightness_pending_ = false;
           stage_ = Stage::BRIGHTNESS_ACK;
         } else if (uint32_t(now - last_wire_) >= 80) {
-          tx_ = protocol::record(session_, seq_++, protocol::PING);
+          tx_ = protocol::record(session_, seq_++, protocol::PING, 0, 0, 0, 0, {}, version_);
           ++heartbeats_;
         }
         break;
       case Stage::RECT:
-        tx_ = protocol::record(session_, seq_++, protocol::RECT, x_, y_, w_, h_);
+        tx_ = protocol::record(session_, seq_++, protocol::RECT, x_, y_, w_, h_, {}, version_);
         if (cached_) cache_at_ = 0;
         else encoder_.emplace(w_ * h_, Pixels{snapshot_});
         stage_ = Stage::DATA;
@@ -89,25 +93,26 @@ class StreamEngine {
           }
           body_.assign(cache_ + cache_at_, cache_ + cache_at_ + length);
           cache_at_ += length;
-          protocol::data_record(session_, seq_++, body_, raw_, tx_);
+          protocol::data_record(session_, seq_++, body_, raw_, tx_, version_);
         } else if (!cached_ && encoder_->next(body_)) {
-          protocol::data_record(session_, seq_++, body_, raw_, tx_);
+          protocol::data_record(session_, seq_++, body_, raw_, tx_, version_);
         } else {
           stage_ = Stage::END;
           prepare(now);
         }
         break;
       case Stage::END:
-        tx_ = protocol::record(session_, seq_++, protocol::END);
-        stage_ = Stage::DONE;
+        tx_ = protocol::record(session_, seq_++, protocol::END,
+                               version_ == 7 && final_ ? 1 : 0, 0, 0, 0, {}, version_);
+        stage_ = final_ ? Stage::DONE : Stage::BETWEEN;
         break;
       case Stage::SYNC:
-        tx_ = protocol::record(session_, seq_++, protocol::SYNC);
+        tx_ = protocol::record(session_, seq_++, protocol::SYNC, 0, 0, 0, 0, {}, version_);
         tx_.insert(tx_.begin(), 0);
         stage_ = Stage::SYNCED;
         break;
       case Stage::EXIT:
-        tx_ = protocol::record(session_, seq_++, protocol::EXIT);
+        tx_ = protocol::record(session_, seq_++, protocol::EXIT, 0, 0, 0, 0, {}, version_);
         stage_ = Stage::BYE;
         break;
       default:
@@ -140,6 +145,10 @@ class StreamEngine {
       fail("reverse integrity");
       return false;
     }
+    if (stage_ != Stage::READY && r.version != version_) {
+      fail("reverse version changed");
+      return false;
+    }
     if (uint32_t(r.consumed - consumed_) > uint32_t(sent_ - consumed_)) {
       fail("credit ahead");
       return false;
@@ -157,8 +166,13 @@ class StreamEngine {
         return true;
       }
       stage_ = Stage::IDLE;
+      version_ = r.version;
       live_brightness_ = r.status == protocol::READY_BRIGHTNESS;
     } else if (r.status == protocol::ERROR) {
+      if (burst_rects_ > 1 || !final_) {
+        fail("burst receiver fault");
+        return true;
+      }
       if (++retries_ > 2) {
         fail("receiver CRC fault");
         return true;
@@ -174,11 +188,12 @@ class StreamEngine {
       stage_ = snapshot_ ? Stage::RECT : Stage::IDLE;
       if (!snapshot_) retries_ = 0;
     } else if (r.status == protocol::DONE) {
-      if (stage_ != Stage::DONE || pending() || r.rectangles != uint16_t(completed_ + 1)) {
+      if (stage_ != Stage::DONE || pending() || r.rectangles != uint16_t(completed_ + burst_rects_)) {
         fail("unexpected DONE");
         return true;
       }
       completed_ = uint16_t(r.rectangles);
+      burst_rects_ = 0;
       retries_ = 0;
       snapshot_ = nullptr;
       encoder_.reset();
@@ -209,6 +224,11 @@ class StreamEngine {
     stage_ = Stage::FAILED;
   }
   bool pending() const { return at_ < tx_.size(); }
+  // BETWEEN is reached only after all pixels were encoded. Reuse the snapshot
+  // after the END record is fully queued; receiver work remains credit bounded.
+  bool can_submit() const { return (stage_ == Stage::IDLE || stage_ == Stage::BETWEEN) && !pending(); }
+  unsigned burst_rectangles() const { return burst_rects_; }
+  unsigned version() const { return version_; }
   bool failed() const { return stage_ == Stage::FAILED; }
   bool idle() const { return stage_ == Stage::IDLE && !pending(); }
   Stage stage() const { return stage_; }
@@ -221,10 +241,10 @@ class StreamEngine {
  private:
   Stage stage_ = Stage::STOPPED;
   unsigned session_ = 0, seq_ = 0, x_ = 0, y_ = 0, w_ = 0, h_ = 0, retries_ = 0, mask_ = 0, heartbeats_ = 0;
-  unsigned width_ = 454, height_ = 320;
+  unsigned width_ = 454, height_ = 320, version_ = 6, burst_rects_ = 0;
   uint16_t completed_ = 0;
   uint32_t sent_ = 0, consumed_ = 0, last_wire_ = 0, last_report_ = 0;
-  bool exit_ = false;
+  bool exit_ = false, final_ = true;
   bool live_brightness_ = false, brightness_pending_ = false;
   uint8_t brightness_percent_ = 100;
   const uint8_t *snapshot_ = nullptr;
@@ -283,7 +303,31 @@ struct DirtyRows {
       if (rows[y]) return false;
     return true;
   }
-  bool take(unsigned &x, unsigned &y, unsigned &w, unsigned &h) {
+  // Keep sampling out of the UART service frame and encoder hot path.
+  __attribute__((noinline)) bool take_adaptive(unsigned &x, unsigned &y, unsigned &w, unsigned &h, const uint8_t *frame) {
+    unsigned scanned = 0;
+    while (scanned < height && rows[(next + scanned) % height] == 0) ++scanned;
+    if (scanned == height) return false;
+    y = (next + scanned) % height;
+    const unsigned first = __builtin_ctzll(rows[y]);
+    unsigned last = 63 - __builtin_clzll(rows[y]);
+    const uint64_t whole = (full >> (columns - (last - first + 1))) << first;
+    unsigned candidate_height = 1;
+    while (candidate_height < 16 && y + candidate_height < height && (rows[y + candidate_height] & whole))
+      ++candidate_height;
+    unsigned previous = first;
+    for (unsigned i = first + 1; i <= last; ++i) {
+      if (!(rows[y] & (uint64_t(1) << i))) continue;
+      const unsigned gap = i - previous - 1;
+      if (gap && !GapSplitter::merge(frame, width, (previous + 1) * TILE, y, gap * TILE, candidate_height)) {
+        last = previous;
+        break;
+      }
+      previous = i;
+    }
+    return claim(x, y, w, h, first, last, false);
+  }
+  bool take(unsigned &x, unsigned &y, unsigned &w, unsigned &h, unsigned max_gap_tiles = MAX_GAP_TILES) {
     unsigned scanned = 0;
     while (scanned < height && rows[(next + scanned) % height] == 0) ++scanned;
     if (scanned == height) return false;
@@ -297,13 +341,21 @@ struct DirtyRows {
     for (unsigned i = first + 1; i <= last; ++i) {
       if ((rows[y] & (uint64_t(1) << i)) == 0) continue;
       const unsigned gap = i - run_start - 1;
+      if (!max_gap_tiles && gap) {
+        gap_length = gap;
+        gap_start = run_start + 1;
+        break;
+      }
       if (gap > gap_length) {
         gap_length = gap;
         gap_start = run_start + 1;
       }
       run_start = i;
     }
-    if (gap_length > MAX_GAP_TILES) last = gap_start - 1;
+    if (gap_length > max_gap_tiles) last = gap_start - 1;
+    return claim(x, y, w, h, first, last, !max_gap_tiles);
+  }
+  bool claim(unsigned &x, unsigned y, unsigned &w, unsigned &h, unsigned first, unsigned last, bool exact) {
     const uint64_t mask = (full >> (columns - (last - first + 1))) << first;
     x = first * TILE;
     const unsigned right = std::min<unsigned>(width, (last + 1) * TILE);
@@ -312,7 +364,8 @@ struct DirtyRows {
     rows[y] &= ~mask;
     // Consume only matching columns. Dirty tiles outside the span, in this row
     // or later ones, stay queued.
-    while (h < 16 && y + h < height && (rows[y + h] & mask)) {
+    while (h < 16 && y + h < height && (rows[y + h] & mask) &&
+           (!exact || (rows[y + h] & mask) == mask)) {
       rows[y + h] &= ~mask;
       ++h;
     }

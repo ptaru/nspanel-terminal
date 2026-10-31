@@ -53,10 +53,13 @@ wifi:
 
 captive_portal:
 
+# The component comes from the tagged GitHub release. Track `main` instead of
+# the tag to follow development, or point a local checkout at `components/`:
+#   source:
+#     type: local
+#     path: /path/to/nspanel-terminal/components
 external_components:
-  - source:
-      type: local
-      path: ../components
+  - source: github://ptaru/nspanel-terminal@v0.5.0
     components: [nspanel_terminal]
 
 # Keep the display powered during TFT updates.
