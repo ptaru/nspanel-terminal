@@ -2,7 +2,7 @@
 
 Copy `secrets.yaml.example` to `secrets.yaml` and set your network credentials
 and TFT URL. Both examples load the component from the tagged GitHub release
-(`github://ptaru/nspanel-terminal@v0.6.0`), so ESPHome clones it on first use
+(`github://ptaru/nspanel-terminal@v0.7.0`), so ESPHome clones it on first use
 and no local checkout is needed. They perform the first TFT installation and
 later updates, and expose the brightness actions.
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.7.0 — 2026-10-31
+
+- Replace the 290 KB full-frame framebuffer mirror with flush-area streaming:
+  each LVGL flush area is PackBits-encoded into 16-row slots and queued through
+  the transport. The mirror, dirty-row scan and snapshot are gone.
+- Allocate the four frame slots in internal RAM when the stream starts and
+  remove the component's `psram` dependency. With smaller slots and a 10% LVGL
+  buffer the pipeline runs without PSRAM; the default panel build keeps the 20%
+  buffer and 4 x 16-row slots in internal RAM.
+- Add a `report_memory` diagnostic (internal/PSRAM free, largest block, slot
+  placement, maximum loop gap) and a `Render action` measurement from the
+  action to the last DONE.
+- Fix re-entry after a failed stream start so a stopped terminal can retry the
+  slot allocation.
+- Measured on the EU panel: five-redraw total 447-448 ms -> 310-319 ms; page
+  transitions 254-341 ms action-to-DONE; page bytes +3.5-15% because the mirror
+  no longer prunes unchanged pixels; clock 41 ms / about 10.9 KB; zero faults.
+- Protocol 7 and both native-93 TFTs are unchanged from 0.6.0; no TFT upload is
+  required. The US build remains offline-validated only.
+
 ## 0.6.0 — 2026-10-31
 
 - Speed up PackBits encoding and DATA framing with bounded direct buffer writes
