@@ -2,7 +2,7 @@
 
 This ESPHome component implements an RGB565 display and single-pointer
 touchscreen for the EU and US NSPanel terminal. It requires ESPHome
-2026.10.x, ESP32 PSRAM and exclusive ownership of the display UART. See
+2026.10.x and exclusive ownership of the display UART; PSRAM is optional. See
 [the EU example](../../examples/panel.yaml) and
 [the US example](../../examples/panel-us.yaml) for wiring, LVGL and API actions.
 
