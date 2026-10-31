@@ -16,7 +16,7 @@ from esphome.const import (
 
 from . import NSPanelDisplay
 
-DEPENDENCIES = ["uart", "psram"]
+DEPENDENCIES = ["uart"]
 
 CONF_DIAGNOSTICS = "diagnostics"
 CONF_TFT_URL = "tft_url"

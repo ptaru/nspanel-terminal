@@ -1,7 +1,9 @@
 #include "nspanel_terminal.h"
 
 #include <driver/uart.h>
+#include <esp_heap_caps.h>
 #include <esp_http_client.h>
+#include <esp_memory_utils.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -27,10 +29,18 @@ NSPanelDisplay::~NSPanelDisplay() {
   job_storage_ = nullptr;
 }
 bool NSPanelDisplay::init_frame_jobs_() {
-  RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::ALLOC_EXTERNAL);
+  // LVGL allocates its draw buffer during setup; allocate the slots only when
+  // the stream starts so the smaller, hotter LVGL buffer wins internal RAM.
+  RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::PREFER_INTERNAL);
   job_capacity_ = size_t(width_) * JOB_ROWS * 2u + 4096u;
   job_storage_ = allocator.allocate(job_capacity_ * JOB_SLOTS);
-  if (!job_storage_) return false;
+  if (!job_storage_) {
+    ESP_LOGE(TAG, "Frame slot allocation failed");
+    return false;
+  }
+  frame_slots_internal_ = esp_ptr_internal(job_storage_);
+  ESP_LOGI(TAG, "Frame slots: %u x %u bytes in %s RAM", unsigned(JOB_SLOTS), unsigned(job_capacity_),
+           frame_slots_internal_ ? "internal" : "external");
   for (unsigned i = 0; i < JOB_SLOTS; ++i) {
     jobs_[i].cache = job_storage_ + size_t(i) * job_capacity_;
     jobs_[i].state = 0;
@@ -87,12 +97,6 @@ void NSPanelDisplay::request_repaint_() {
   invalidate_screen_();
 }
 void NSPanelDisplay::setup() {
-  if (!init_frame_jobs_()) {
-    ESP_LOGE(TAG, "PSRAM frame-job allocation failed");
-    mark_failed();
-    state_ = State::STOPPED;
-    return;
-  }
   dirty_.set_dimensions(width_, height_);
   dirty_.all();
   repaint_pending_ = true;
@@ -193,6 +197,14 @@ void NSPanelDisplay::report_render_measurement() {
   log_timings();
   diagnostics_ = false;
   measurement_active_ = false;
+}
+void NSPanelDisplay::report_memory() {
+  std::lock_guard<std::recursive_mutex> lock(mutex_);
+  ESP_LOGI(TAG, "Memory: internal free=%u largest=%u psram free=%u, slots=%u x %u (%s), max loop gap=%u ms",
+           unsigned(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+           unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
+           unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)), unsigned(JOB_SLOTS), unsigned(job_capacity_),
+           frame_slots_internal_ ? "internal" : "external", unsigned(max_gap_us_ / 1000));
 }
 void NSPanelDisplay::start_render_benchmark(unsigned repeats) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -874,7 +886,9 @@ void NSPanelDisplay::request_abandon() {
 }
 void NSPanelDisplay::request_enter() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (state_ != State::STOPPED || !job_storage_) return;
+  // Frame slots are allocated when the stream starts, so a stopped terminal
+  // must still be able to re-enter and retry the allocation.
+  if (state_ != State::STOPPED) return;
   if (!startup_retry_) {
     startup_retry_ = true;
     startup_attempts_ = 0;
@@ -1205,6 +1219,10 @@ void NSPanelDisplay::loop() {
       break;
     case State::SWITCHING:
       terminal_active_ = true;
+      if (!job_storage_ && !init_frame_jobs_()) {
+        fail_("frame slots");
+        break;
+      }
       if (!change_baud_(4000000)) {
         fail_("baud switch");
         break;

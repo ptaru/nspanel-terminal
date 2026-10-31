@@ -74,6 +74,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void log_timings();
   void start_render_measurement();
   void report_render_measurement();
+  void report_memory();
   // One action, N full-screen LVGL redraws through the normal dirty-rectangle
   // path. Each repeat is timed from the refresh start to the final DONE.
   void start_render_benchmark(unsigned repeats = 5);
@@ -129,6 +130,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   FrameJob *active_job_ = nullptr;
   bool repaint_pending_ = true;
   bool unsupported_logged_ = false;
+  bool frame_slots_internal_ = false;
   void send_command_(const char *);
   void send_query_(State, const char *);
   bool pump_command_();

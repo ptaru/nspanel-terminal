@@ -35,9 +35,14 @@ reverse) fails safely instead of streaming into the wrong framebuffer.
 The component does not keep a full-frame mirror. Each LVGL flush area is
 PackBits-encoded into one of four slots and queued for the transport; the
 transport sends the length-prefixed payload with the existing rectangle
-protocol. Flush areas are split into 16-row rectangles. When every slot is in
-flight the flush waits for the transport to release one, then continues with
-the remaining rows. The included TFTs use a fixed 3-second host-inactivity
+protocol. Flush areas are split into 16-row rectangles. The slots allocate when
+the stream starts and prefer internal RAM, so LVGL's draw buffer is placed
+first. When every slot is in flight the flush waits for the transport to
+release one, then continues with the remaining rows. The component no longer
+depends on the `psram` component; a panel can run without external memory when
+the slot and LVGL buffer sizes leave room for WiFi and the API. The diagnostic
+protocol benchmarks still allocate their own external buffers and fail
+gracefully without PSRAM. The included TFTs use a fixed 3-second host-inactivity
 watchdog.
 
 The current component services UART records and heartbeats in a task pinned to
