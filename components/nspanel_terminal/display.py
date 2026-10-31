@@ -20,6 +20,7 @@ DEPENDENCIES = ["uart"]
 CONF_DIAGNOSTICS = "diagnostics"
 CONF_TFT_URL = "tft_url"
 CONF_BRIGHTNESS = "brightness"
+CONF_FRAME_SLOTS_RAM = "frame_slots_ram"
 
 PANEL_SIZES = {(454, 320), (320, 480)}
 
@@ -78,6 +79,9 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_WIDTH, default=454): cv.int_range(min=1, max=480),
             cv.Optional(CONF_HEIGHT, default=320): cv.int_range(min=1, max=480),
             cv.Optional(CONF_DIAGNOSTICS, default=False): cv.boolean,
+            cv.Optional(CONF_FRAME_SLOTS_RAM, default="internal"): cv.one_of(
+                "internal", "psram", lower=True
+            ),
             cv.Optional(CONF_TFT_URL): http_tft_url,
             cv.Optional(CONF_BRIGHTNESS): cv.int_range(min=0, max=100),
         }
@@ -103,6 +107,7 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     cg.add(var.set_panel_size(config[CONF_WIDTH], config[CONF_HEIGHT]))
     cg.add(var.set_diagnostics(config[CONF_DIAGNOSTICS]))
+    cg.add(var.set_frame_slots_ram(config[CONF_FRAME_SLOTS_RAM] == "psram"))
     if CONF_TFT_URL in config:
         cg.add(var.set_tft_url(config[CONF_TFT_URL]))
     if CONF_BRIGHTNESS in config:

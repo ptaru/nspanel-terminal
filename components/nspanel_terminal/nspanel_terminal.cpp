@@ -40,11 +40,15 @@ uart::IDFUARTComponent *NSPanelDisplay::idf_uart_() const {
 bool NSPanelDisplay::init_frame_jobs_() {
   // LVGL allocates its draw buffer during setup; allocate the slots only when
   // the stream starts so the smaller, hotter LVGL buffer wins internal RAM.
-  RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::PREFER_INTERNAL);
+  // frame_slots_ram: psram makes the slot placement explicit so the caller can
+  // trade the measured PSRAM cost for internal-RAM headroom.
+  const uint8_t flags = frame_slots_psram_ ? uint8_t(RAMAllocator<uint8_t>::ALLOC_EXTERNAL)
+                                           : uint8_t(RAMAllocator<uint8_t>::PREFER_INTERNAL);
+  RAMAllocator<uint8_t> allocator(flags);
   job_capacity_ = size_t(width_) * JOB_ROWS * 2u + 4096u;
   job_storage_ = allocator.allocate(job_capacity_ * JOB_SLOTS);
   if (!job_storage_) {
-    ESP_LOGE(TAG, "Frame slot allocation failed");
+    ESP_LOGE(TAG, "Frame slot allocation failed in %s", frame_slots_psram_ ? "PSRAM" : "internal RAM");
     return false;
   }
   frame_slots_internal_ = esp_ptr_internal(job_storage_);

@@ -22,6 +22,7 @@ display:
     height: 480
     update_interval: never
     auto_clear_enabled: false
+    # frame_slots_ram: internal  # or psram
 ```
 
 The display UART must be 115200 8N1 with both TX and RX; entry switches it to
@@ -47,9 +48,19 @@ protocol. Flush areas are split into 16-row rectangles. The slots allocate when
 the stream starts and prefer internal RAM, so LVGL's draw buffer is placed
 first. When every slot is in flight the flush waits briefly for the transport to
 release one, then continues with the remaining rows. A timed-out area is
-dropped and a full repaint is scheduled instead of leaving stale pixels. The component no longer
-depends on the `psram` component; a panel can run without external memory when
-the slot and LVGL buffer sizes leave room for WiFi and the API. The diagnostic
+dropped and a full repaint is scheduled instead of leaving stale pixels.
+
+`frame_slots_ram` selects where the four encoded frame slots live. `internal`
+(default) prefers internal RAM and falls back to external RAM if needed. `psram`
+allocates all four slots in PSRAM, requires the `psram:` component, and frees
+about 74 KB of internal RAM on the EU panel; external slots measured roughly
+10-14 ms slower per full redraw than internal slots in the earlier A/B. The
+LVGL draw buffer is separate: ESPHome allocates it according to `buffer_size`
+and falls back to PSRAM when the internal allocation fails.
+
+The component no longer depends on the `psram` component; a panel can run
+without external memory when the slot and LVGL buffer sizes leave room for WiFi
+and the API. The diagnostic
 protocol benchmarks still allocate their own external buffers and fail
 gracefully without PSRAM. The included TFTs use a fixed 3-second host-inactivity
 watchdog.

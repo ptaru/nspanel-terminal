@@ -89,6 +89,7 @@ display:
     height: 480
     update_interval: never
     auto_clear_enabled: false
+    # frame_slots_ram: internal  # or psram (requires psram:)
     tft_url: !secret tft_url
     brightness: 100
 

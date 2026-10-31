@@ -15,6 +15,9 @@
   overriding the shared UART's TX buffer and RX threshold.
 - Make the standard touchscreen `display:` key authoritative and deprecate
   `panel_id`.
+- Add `frame_slots_ram: internal|psram` to place the four encoded frame slots
+  explicitly; `psram` requires the `psram:` component and frees about 74 KB of
+  internal RAM at the measured external-memory cost.
 - Run TFT uploads in a separate task, abort the range read on a negative
   result, bound frame-slot waits, repaint dropped areas, and report the
   transport task's stack high-water mark.

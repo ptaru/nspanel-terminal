@@ -45,6 +45,9 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     brightness_selected_ = true;
   }
   void set_tft_url(const std::string &url) { tft_url_ = url; }
+  // false keeps the four encoded frame slots in internal RAM (with an external
+  // fallback); true allocates them in PSRAM and requires the psram component.
+  void set_frame_slots_ram(bool psram) { frame_slots_psram_ = psram; }
   void set_panel_size(uint16_t width, uint16_t height) {
     width_ = width;
     height_ = height;
@@ -136,6 +139,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool repaint_pending_ = true;
   bool unsupported_logged_ = false;
   bool frame_slots_internal_ = false;
+  bool frame_slots_psram_ = false;
   uart::IDFUARTComponent *idf_uart_() const;
   void send_command_(const char *);
   void send_query_(State, const char *);
