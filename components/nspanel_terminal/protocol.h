@@ -5,6 +5,12 @@
 #include <string>
 #include <vector>
 
+#if defined(__GNUC__) && !defined(__clang__)
+// Keep byte loops inlined even when the firmware is built for size (-Os).
+#define NSPANEL_PROTOCOL_HOT __attribute__((optimize("O3")))
+#else
+#define NSPANEL_PROTOCOL_HOT
+#endif
 namespace esphome::nspanel_terminal::protocol {
 enum { RECT = 1, DATA, END, PING, EXIT, SYNC, BRIGHTNESS };
 enum { READY = 128, BYE, PROGRESS, ERROR, SYNCED, DONE, READY_BRIGHTNESS, BRIGHTNESS_DONE };
@@ -15,7 +21,7 @@ inline void put16(std::vector<uint8_t> &p, unsigned at, unsigned n) {
   p[at] = uint8_t(n);
   p[at + 1] = uint8_t(n >> 8);
 }
-inline uint16_t crc(const uint8_t *p, size_t n) {
+NSPANEL_PROTOCOL_HOT inline uint16_t crc(const uint8_t *p, size_t n) {
   static constexpr auto table = []() {
     std::array<uint16_t, 256> t{};
     for (unsigned i = 0; i < 256; i++) {
@@ -100,7 +106,7 @@ class Encoder {
  public:
   Encoder(unsigned count, Pixel source) : pixel(source), total(count) { fill(); }
   unsigned consumed() const { return used; }
-  bool next(std::vector<uint8_t> &out) {
+  NSPANEL_PROTOCOL_HOT bool next(std::vector<uint8_t> &out) {
     // Keep hot counters local: a source callback may alias encoder members,
     // forcing field reloads/stores per pixel on the ESP32 size optimiser.
     unsigned g = generated, u = used, n = have, limit = total;
@@ -123,9 +129,11 @@ class Encoder {
       refill();
       return v;
     };
-    out.clear();
-    out.reserve(PAYLOAD);
-    while (u < limit && out.size() + 3 <= PAYLOAD) {
+    // Bound the output once; avoid a vector operation for each encoded byte.
+    out.resize(PAYLOAD);
+    uint8_t *dest = out.data();
+    unsigned size = 0;
+    while (u < limit && size + 3 <= PAYLOAD) {
       if (n == 2 && a == b) {
         uint16_t v = a;
         unsigned run = 2;
@@ -142,21 +150,21 @@ class Encoder {
           ++u;
         }
         refill();
-        out.push_back(uint8_t(127 + run));
-        out.push_back(uint8_t(v >> 8));
-        out.push_back(uint8_t(v));
+        dest[size++] = uint8_t(127 + run);
+        dest[size++] = uint8_t(v >> 8);
+        dest[size++] = uint8_t(v);
       } else {
-        unsigned room = std::min(128u, unsigned((PAYLOAD - out.size() - 1) / 2));
-        size_t mark = out.size();
-        out.push_back(0);
+        unsigned room = std::min(128u, unsigned((PAYLOAD - size - 1) / 2));
+        size_t mark = size;
+        dest[size++] = 0;
         unsigned run = 0;
         do {
           auto v = pop();
-          out.push_back(uint8_t(v >> 8));
-          out.push_back(uint8_t(v));
+          dest[size++] = uint8_t(v >> 8);
+          dest[size++] = uint8_t(v);
           ++run;
         } while (run < room && n && !(n == 2 && a == b));
-        out[mark] = uint8_t(run - 1);
+        dest[mark] = uint8_t(run - 1);
       }
     }
     generated = g;
@@ -164,15 +172,21 @@ class Encoder {
     have = n;
     look[0] = a;
     look[1] = b;
-    return !out.empty();
+    out.resize(size);
+    return size != 0;
   }
 };
 /* Reuse both staging buffers rather than allocating header/body/COBS storage
  * for every DATA record. Generic control records keep the small helper above. */
-inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_t> &body, std::vector<uint8_t> &raw,
+NSPANEL_PROTOCOL_HOT inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_t> &body, std::vector<uint8_t> &raw,
                         std::vector<uint8_t> &out, unsigned version = 6) {
-  raw.assign(20, 0);
-  raw.reserve(534);
+  if (body.size() > PAYLOAD) {
+    raw.clear();
+    out.clear();
+    return;
+  }
+  raw.resize(22 + body.size());
+  std::fill_n(raw.data(), 20, uint8_t(0));
   raw[0] = 'R';
   raw[1] = 'S';
   raw[2] = uint8_t(version);
@@ -181,34 +195,33 @@ inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_
   put16(raw, 6, seq);
   put16(raw, 8, body.size());
   put16(raw, 18, crc(raw.data(), 18));
-  raw.insert(raw.end(), body.begin(), body.end());
-  auto c = crc(raw.data(), raw.size());
-  raw.push_back(uint8_t(c));
-  raw.push_back(uint8_t(c >> 8));
-  out.clear();
-  out.reserve(538);
-  out.push_back(0);
-  size_t mark = 0;
+  std::copy(body.begin(), body.end(), raw.data() + 20);
+  const auto c = crc(raw.data(), 20 + body.size());
+  raw[20 + body.size()] = uint8_t(c);
+  raw[21 + body.size()] = uint8_t(c >> 8);
+  out.resize(538);
+  uint8_t *dest = out.data();
+  size_t size = 1, mark = 0;
   unsigned code = 1;
-  for (auto b : raw) {
+  for (uint8_t b : raw) {
     if (!b) {
-      out[mark] = uint8_t(code);
-      mark = out.size();
-      out.push_back(0);
+      dest[mark] = uint8_t(code);
+      mark = size++;
       code = 1;
     } else {
-      out.push_back(b);
+      dest[size++] = b;
       if (++code == 255) {
-        out[mark] = 255;
-        mark = out.size();
-        out.push_back(0);
+        dest[mark] = 255;
+        mark = size++;
         code = 1;
       }
     }
   }
-  out[mark] = uint8_t(code);
-  out.push_back(0);
+  dest[mark] = uint8_t(code);
+  dest[size++] = 0;
+  out.resize(size);
 }
+
 constexpr unsigned RESPONSE = 32;
 struct Reply {
   unsigned version = 0, status = 0, seq = 0, rectangles = 0, flags = 0, mask = 0, freshness = 0, x = 0, y = 0, highwater = 0;
@@ -233,3 +246,5 @@ inline bool reply(const uint8_t *p, unsigned session, Reply &r) {
   return r.status >= READY && r.status <= BRIGHTNESS_DONE && r.highwater <= WINDOW;
 }
 }  // namespace esphome::nspanel_terminal::protocol
+
+#undef NSPANEL_PROTOCOL_HOT

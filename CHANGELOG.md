@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 — 2026-10-31
+
+- Speed up PackBits encoding and DATA framing with bounded direct buffer writes
+  and GCC speed optimisation confined to the hot routines.
+- Add byte-for-byte compatibility tests against the previous encoder across
+  packet/run boundaries, every legal DATA payload length and protocols 6/7.
+- Keep the protocol, credit window and both TFTs unchanged. Existing 0.5.0
+  installations need only update the ESP32 component; no TFT upload is required.
+  The US build remains offline-validated only.
+
 ## 0.5.0 — 2026-10-31
 
 - Add protocol 7 and native 93 TFTs with burst completion and live brightness.
