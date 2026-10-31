@@ -54,7 +54,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool diagnostics() const { return diagnostics_; }
   void request_full_redraw() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    if (buffer_) dirty_.all();
+    request_repaint_();
   }
   void set_refresh_active(bool active) {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -112,6 +112,23 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     BRIGHTNESS_VERIFY,
     STOPPED
   };
+  // Flush areas are PackBits-encoded into these slots; the mirror is gone.
+  static constexpr unsigned JOB_ROWS = 16;
+  static constexpr unsigned JOB_SLOTS = 4;
+  struct FrameJob {
+    uint8_t *cache = nullptr;
+    size_t size = 0;
+    uint16_t x = 0, y = 0, w = 0, h = 0;
+    uint8_t state = 0;  // 0 free, nonzero reserved/queued/active
+  };
+  std::array<FrameJob, JOB_SLOTS> jobs_{};
+  uint8_t *job_storage_ = nullptr;
+  size_t job_capacity_ = 0;
+  unsigned job_queue_[JOB_SLOTS]{};
+  unsigned job_head_ = 0, job_tail_ = 0, job_queued_ = 0;
+  FrameJob *active_job_ = nullptr;
+  bool repaint_pending_ = true;
+  bool unsupported_logged_ = false;
   void send_command_(const char *);
   void send_query_(State, const char *);
   bool pump_command_();
@@ -123,6 +140,15 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void fail_(const char *);
   void finish_recovery_();
   void service_stream_(int incoming = -1);
+  bool init_frame_jobs_();
+  FrameJob *acquire_job_(std::unique_lock<std::recursive_mutex> &lock);
+  void enqueue_job_(FrameJob *job);
+  FrameJob *dequeue_job_();
+  void release_active_job_();
+  void clear_jobs_();
+  bool job_queue_empty_() const { return job_queued_ == 0; }
+  void request_repaint_();
+  void invalidate_screen_();
   bool upload_tft_();
   bool upload_ack_(uint32_t &position, uint32_t expected);
   State state_ = State::BOOT_WAIT;
@@ -139,7 +165,6 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   size_t command_at_ = 0;
   uint16_t width_ = 454, height_ = 320;
   DirtyRows dirty_;
-  uint8_t *snapshot_ = nullptr;
   StreamEngine stream_;
   HighFrequencyLoopRequester high_frequency_;
   NSPanelTouchscreen *touchscreen_ = nullptr;
@@ -164,7 +189,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   std::array<TraceEvent, 96> trace_buf_{};
   unsigned trace_head_ = 0, trace_count_ = 0;
   uint32_t measurement_bytes_ = 0, measurement_started_ms_ = 0;
-  uint32_t measurement_first_submit_us_ = 0, measurement_last_done_us_ = 0;
+  uint32_t measurement_started_us_ = 0, measurement_first_submit_us_ = 0, measurement_last_done_us_ = 0;
   unsigned measurement_rectangles_ = 0, measurement_faults_ = 0, measurement_resyncs_ = 0;
   bool measurement_active_ = false;
   bool benchmark_active_ = false;

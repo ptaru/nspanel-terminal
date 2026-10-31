@@ -12,7 +12,7 @@
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include "nspanel_touchscreen.h"
-#include "dirty_scan.h"
+#include "frame_encode.h"
 #ifdef USE_LVGL
 #include <lvgl.h>
 #endif
@@ -23,22 +23,79 @@ NSPanelDisplay::~NSPanelDisplay() {
   while (task_running_) vTaskDelay(1);
   RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
   RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
-  RAMAllocator<uint8_t>().deallocate(snapshot_, size_t(width_) * 16 * 2);
+  if (job_storage_) RAMAllocator<uint8_t>().deallocate(job_storage_, job_capacity_ * JOB_SLOTS);
+  job_storage_ = nullptr;
+}
+bool NSPanelDisplay::init_frame_jobs_() {
+  RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::ALLOC_EXTERNAL);
+  job_capacity_ = size_t(width_) * JOB_ROWS * 2u + 4096u;
+  job_storage_ = allocator.allocate(job_capacity_ * JOB_SLOTS);
+  if (!job_storage_) return false;
+  for (unsigned i = 0; i < JOB_SLOTS; ++i) {
+    jobs_[i].cache = job_storage_ + size_t(i) * job_capacity_;
+    jobs_[i].state = 0;
+    jobs_[i].size = 0;
+  }
+  job_head_ = job_tail_ = job_queued_ = 0;
+  active_job_ = nullptr;
+  return true;
+}
+NSPanelDisplay::FrameJob *NSPanelDisplay::acquire_job_(std::unique_lock<std::recursive_mutex> &lock) {
+  while (job_storage_ && state_ == State::STREAM) {
+    for (auto &job : jobs_)
+      if (job.state == 0) {
+        job.state = 1;
+        return &job;
+      }
+    lock.unlock();
+    vTaskDelay(pdMS_TO_TICKS(1));
+    lock.lock();
+  }
+  return nullptr;
+}
+void NSPanelDisplay::enqueue_job_(FrameJob *job) {
+  job->state = 2;
+  job_queue_[job_head_] = unsigned(job - jobs_.data());
+  job_head_ = (job_head_ + 1) % JOB_SLOTS;
+  ++job_queued_;
+}
+NSPanelDisplay::FrameJob *NSPanelDisplay::dequeue_job_() {
+  if (!job_queued_) return nullptr;
+  FrameJob *job = &jobs_[job_queue_[job_tail_]];
+  job_tail_ = (job_tail_ + 1) % JOB_SLOTS;
+  --job_queued_;
+  return job;
+}
+void NSPanelDisplay::release_active_job_() {
+  if (!active_job_) return;
+  active_job_->state = 0;
+  active_job_ = nullptr;
+}
+void NSPanelDisplay::clear_jobs_() {
+  for (auto &job : jobs_) job.state = 0;
+  job_head_ = job_tail_ = job_queued_ = 0;
+  active_job_ = nullptr;
+}
+void NSPanelDisplay::invalidate_screen_() {
+#ifdef USE_LVGL
+  if (auto *display = lv_display_get_default(); display != nullptr)
+    if (auto *screen = lv_screen_active(); screen != nullptr) lv_obj_invalidate(screen);
+#endif
+}
+void NSPanelDisplay::request_repaint_() {
+  dirty_.all();
+  invalidate_screen_();
 }
 void NSPanelDisplay::setup() {
-  RAMAllocator<uint8_t> allocator(RAMAllocator<uint8_t>::ALLOC_EXTERNAL);
-  const size_t framebuffer_bytes = size_t(width_) * height_ * 2;
-  this->buffer_ = allocator.allocate(framebuffer_bytes);
-  snapshot_ = allocator.allocate(size_t(width_) * 16 * 2);
-  if (!buffer_ || !snapshot_) {
-    ESP_LOGE(TAG, "PSRAM framebuffer/snapshot allocation failed");
+  if (!init_frame_jobs_()) {
+    ESP_LOGE(TAG, "PSRAM frame-job allocation failed");
     mark_failed();
     state_ = State::STOPPED;
     return;
   }
-  std::memset(buffer_, 0, framebuffer_bytes);
   dirty_.set_dimensions(width_, height_);
   dirty_.all();
+  repaint_pending_ = true;
   deadline_ = millis() + 2000;
   task_stop_ = false;
   if (xTaskCreatePinnedToCore(task_entry_, "nspanel_uart", 6144, this, 2, &task_, 0) != pdPASS) {
@@ -103,6 +160,7 @@ void NSPanelDisplay::start_render_measurement() {
   measurement_faults_ = faults_;
   measurement_resyncs_ = resyncs_;
   measurement_started_ms_ = millis();
+  measurement_started_us_ = micros();
   measurement_first_submit_us_ = measurement_last_done_us_ = 0;
   clear_trace();
   diagnostics_ = true;
@@ -127,6 +185,10 @@ void NSPanelDisplay::report_render_measurement() {
            unsigned(uint16_t(completed_rectangles() - measurement_rectangles_)),
            faults_ - measurement_faults_, resyncs_ - measurement_resyncs_, trace_count_,
            trace_count_ == trace_buf_.size() ? " (buffer may have wrapped)" : "");
+  const uint32_t action_us = measurement_last_done_us_ >= measurement_started_us_
+                                 ? measurement_last_done_us_ - measurement_started_us_
+                                 : 0;
+  ESP_LOGI(TAG, "Render action: %u ms (start to last DONE)", unsigned(action_us / 1000));
   diagnostics_ = true;
   log_timings();
   diagnostics_ = false;
@@ -134,8 +196,9 @@ void NSPanelDisplay::report_render_measurement() {
 }
 void NSPanelDisplay::start_render_benchmark(unsigned repeats) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (state_ != State::STREAM || !stream_.idle() || !buffer_ || !snapshot_ || benchmark_active_ ||
-      render_benchmark_active_ || render_start_pending_ || exit_requested_) {
+  if (state_ != State::STREAM || !stream_.idle() || !job_storage_ || benchmark_active_ ||
+      render_benchmark_active_ || render_start_pending_ || !job_queue_empty_() || active_job_ ||
+      exit_requested_) {
     ESP_LOGW(TAG, "Render benchmark requires an idle streaming terminal");
     return;
   }
@@ -152,8 +215,13 @@ void NSPanelDisplay::start_render_benchmark(unsigned repeats) {
 void NSPanelDisplay::begin_render_repeat_() {
   // Called from loop() with the mutex held. The refresh runs on LVGL's next
   // timer tick; the transport task keeps servicing the link while it renders.
-  if (!render_benchmark_active_ || state_ != State::STREAM || !buffer_ || !snapshot_) {
+  if (!render_benchmark_active_ || state_ != State::STREAM || !job_storage_) {
     cancel_render_benchmark_("terminal left streaming");
+    return;
+  }
+  if (!job_queue_empty_() || active_job_) {
+    // Let queued flush areas drain so the repeat starts from a clean queue.
+    render_start_pending_ = true;
     return;
   }
   if (refresh_active_ || lvgl_refreshing_) {
@@ -287,7 +355,7 @@ void NSPanelDisplay::cancel_render_benchmark_(const char *reason) {
 void NSPanelDisplay::start_protocol_benchmark() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (benchmark_active_ || render_benchmark_active_ || render_start_pending_ || state_ != State::STREAM ||
-      !stream_.idle() || !buffer_ || !snapshot_ || exit_requested_) {
+      !stream_.idle() || !job_storage_ || exit_requested_) {
     ESP_LOGW(TAG, "Protocol benchmark requires an idle streaming terminal");
     return;
   }
@@ -399,36 +467,45 @@ void NSPanelDisplay::update() {
 void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, const uint8_t *ptr,
                                     display::ColorOrder order, display::ColorBitness bitness, bool big_endian,
                                     int x_offset, int y_offset, int x_pad) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (this->buffer_ == nullptr) return;
-  // Gate snapshots from the first flush of an LVGL refresh to REFR_READY. The
-  // refresh-start hook only marks that a refresh is in progress; gating there
-  // would also stall the transport while LVGL renders, even when the refresh
-  // changes nothing. The LVGL flag keeps a direct bulk draw outside a refresh
-  // from leaving the gate set.
+  std::unique_lock<std::recursive_mutex> lock(mutex_);
+  // The refresh-start hook marks that LVGL is rendering; the benchmark uses the
+  // flag to know when a forced redraw has produced its flush areas.
   if (refresh_hooks_installed_ && lvgl_refreshing_) refresh_active_ = true;
+  // Without a mirror there is no fallback framebuffer. Only the RGB565 fast
+  // path is supported; anything else is a firmware fault, not a slow path.
   if (order != display::COLOR_ORDER_RGB || bitness != display::COLOR_BITNESS_565 || big_endian ||
       this->get_rotation() != display::DISPLAY_ROTATION_0_DEGREES || this->is_clipping() || x_start < 0 ||
       y_start < 0 || w <= 0 || h <= 0 || x_start + w > width_ || y_start + h > height_ ||
       x_offset < 0 || y_offset < 0 || x_pad < 0) {
-    display::Display::draw_pixels_at(x_start, y_start, w, h, ptr, order, bitness, big_endian, x_offset, y_offset,
-                                     x_pad);
+    if (!unsupported_logged_) {
+      ESP_LOGE(TAG, "Unsupported draw path; flushed pixels dropped");
+      unsupported_logged_ = true;
+    }
     return;
   }
+  // Dropping flushes while leaving the terminal prevents the ring from
+  // filling with frames the transport will never submit.
+  if (state_ != State::STREAM || !job_storage_ || exit_requested_) return;
   const size_t source_stride = size_t(x_offset + w + x_pad) * 2u;
-  int changed = 0;
-  for (int row = 0; row < h; ++row) {
-    const uint8_t *source = ptr + size_t(y_offset + row) * source_stride + 2u * x_offset;
-    uint8_t *target = this->buffer_ + 2u * (size_t(y_start + row) * width_ + x_start);
-    if (std::memcmp(source, target, size_t(w) * 2u) == 0) continue;
-    // Compare on the same 8-pixel grid as DirtyRows. A wide LVGL flush can
-    // contain several independent changes, with unchanged tiles between them.
-    // The scan replaces one memcmp and one mark per tile with a single pass.
-    this->dirty_.merge(y_start + row, scan_dirty_row(source, target, unsigned(x_start), unsigned(w)));
-    std::memcpy(target, source, size_t(w) * 2u);
-    ++changed;
+  for (int first = 0; first < h; first += int(JOB_ROWS)) {
+    const int rows = std::min<int>(JOB_ROWS, h - first);
+    FrameJob *job = acquire_job_(lock);
+    if (!job) return;
+    const size_t size = encode_rows(ptr + size_t(y_offset + first) * source_stride, source_stride, x_offset,
+                                    unsigned(w), unsigned(rows), job->cache, job_capacity_);
+    if (!size) {
+      ESP_LOGE(TAG, "Frame-job encode overflow");
+      job->state = 0;
+      return;
+    }
+    job->x = uint16_t(x_start);
+    job->y = uint16_t(y_start + first);
+    job->w = uint16_t(w);
+    job->h = uint16_t(rows);
+    job->size = size;
+    enqueue_job_(job);
   }
-  if (changed) trace_(3, uint16_t(w), uint16_t(h), uint16_t(x_start), uint16_t(y_start));
+  trace_(3, uint16_t(w), uint16_t(h), uint16_t(x_start), uint16_t(y_start));
 }
 
 void NSPanelDisplay::drain_() {
@@ -659,31 +736,26 @@ void NSPanelDisplay::service_stream_(int incoming) {
     }
   }
   do {
-    if (stream_.can_submit() && !benchmark_active_ && (!exit_requested_ || !stream_.idle()) &&
-        !refresh_active_ && !render_wait_refresh_) {
-      unsigned x, y, w, h;
-      const bool have_rectangle = stream_.version() == 7 ? dirty_.take_adaptive(x, y, w, h, buffer_)
-                                                         : dirty_.take(x, y, w, h);
-      if (have_rectangle) {
-        const uint32_t copy_started = render_repeat_active_ ? micros() : 0;
-        for (unsigned row = 0; row < h; row++)
-          std::memcpy(snapshot_ + 2 * row * w, buffer_ + 2 * ((y + row) * width_ + x), 2 * w);
-        if (render_repeat_active_) render_stats_.copy_us += micros() - copy_started;
-        if (!stream_.submit(x, y, w, h, snapshot_, millis(),
-                            dirty_.empty() || stream_.burst_rectangles() >= 255)) {
-          dirty_.all();
+    if (stream_.can_submit() && !benchmark_active_ && !exit_requested_) {
+      FrameJob *job = dequeue_job_();
+      if (job) {
+        const bool final = job_queue_empty_() || stream_.burst_rectangles() >= 255;
+        if (!stream_.submit_cached(job->x, job->y, job->w, job->h, job->cache, job->cache, job->size, millis(),
+                                   final)) {
+          clear_jobs_();
           fail_("rectangle submit");
           return;
         }
+        active_job_ = job;
         submit_ms_ = millis();
         if (measurement_active_ && !measurement_first_submit_us_) measurement_first_submit_us_ = micros();
-        trace_(4, uint16_t(w), uint16_t(h), uint16_t(x), uint16_t(y));
+        trace_(4, job->w, job->h, job->x, job->y);
       }
     }
     if (benchmark_legacy_) ++benchmark_service_calls_;
-    if (render_wait_refresh_) {
-      // No frame is pending yet; keep the reverse timeout fresh without
-      // putting keepalive PINGs into the measured frame transfer.
+    if (render_wait_refresh_ && !active_job_ && job_queue_empty_()) {
+      // Nothing to send yet; keep the reverse timeout fresh without putting
+      // keepalive PINGs into the measured frame transfer.
       stream_.keepalive(millis());
       break;
     }
@@ -691,6 +763,11 @@ void NSPanelDisplay::service_stream_(int incoming) {
     const bool timed_encode = benchmark_legacy_ || render_repeat_active_;
     const uint32_t encode_started = timed_encode ? micros() : 0;
     stream_.prepare(millis());
+    if (active_job_ && stream_.stage() != StreamEngine::Stage::RECT &&
+        stream_.stage() != StreamEngine::Stage::DATA) {
+      // All DATA records for this rectangle are queued; the slot can be reused.
+      release_active_job_();
+    }
     if (benchmark_legacy_) benchmark_encode_us_ += micros() - encode_started;
     if (render_repeat_active_) render_stats_.encode_us += micros() - encode_started;
     if (stream_.failed()) {
@@ -735,8 +812,8 @@ void NSPanelDisplay::service_stream_(int incoming) {
     }
     stream_.sent(count, millis());
   } while (uint32_t(micros() - started) < 1500);
-  if (render_repeat_active_ && !render_wait_refresh_ && stream_.idle() && dirty_.empty() &&
-      completed_rectangles() != render_rect_start_) {
+  if (render_repeat_active_ && !render_wait_refresh_ && stream_.idle() && job_queue_empty_() &&
+      active_job_ == nullptr && completed_rectangles() != render_rect_start_) {
     const uint32_t ended = micros();
     render_repeat_active_ = false;
     render_stats_.total_us = ended - render_repeat_started_us_;
@@ -757,6 +834,8 @@ void NSPanelDisplay::fail_(const char *reason) {
   ++faults_;
   ESP_LOGE(TAG, "Transport stopped: %s", reason);
   restore_page_ = false;
+  clear_jobs_();
+  repaint_pending_ = true;
   dirty_.all();
   touch_reset_pending_ = true;
   pending_touches_ = TouchQueue();
@@ -776,6 +855,8 @@ void NSPanelDisplay::finish_recovery_() {
   benchmark_cache_ = nullptr;
   RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
   benchmark_snapshot_ = nullptr;
+  clear_jobs_();
+  repaint_pending_ = true;
   state_ = State::STOPPED;
   terminal_active_ = false;
   high_frequency_.stop();
@@ -793,7 +874,7 @@ void NSPanelDisplay::request_abandon() {
 }
 void NSPanelDisplay::request_enter() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (state_ != State::STOPPED || !buffer_ || !snapshot_) return;
+  if (state_ != State::STOPPED || !job_storage_) return;
   if (!startup_retry_) {
     startup_retry_ = true;
     startup_attempts_ = 0;
@@ -801,6 +882,8 @@ void NSPanelDisplay::request_enter() {
   exit_requested_ = false;
   snapshots_ready_ = false;
   restore_page_ = false;
+  clear_jobs_();
+  repaint_pending_ = true;
   dirty_.all();
   rx_count_ = 0;
   state_ = State::BOOT_WAIT;
@@ -1128,6 +1211,12 @@ void NSPanelDisplay::loop() {
       }
       stream_.begin(session_, now, width_, height_);
       if (exit_requested_) stream_.request_exit();
+      if (repaint_pending_) {
+        // The mirror is gone, so re-entering the stream needs a full LVGL
+        // repaint; the flush areas are encoded and queued as they arrive.
+        request_repaint_();
+        repaint_pending_ = false;
+      }
       state_ = State::STREAM;
       break;
     case State::STREAM:

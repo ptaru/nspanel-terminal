@@ -32,24 +32,26 @@ accepts revision 92 for protocol 6 compatibility. The display loader checks the
 stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the
 reverse) fails safely instead of streaming into the wrong framebuffer.
 
-The component tracks changed pixels in 8-pixel column tiles and selects dirty
-rectangles for transmission. The included TFTs use a fixed 3-second host-inactivity
+The component does not keep a full-frame mirror. Each LVGL flush area is
+PackBits-encoded into one of four slots and queued for the transport; the
+transport sends the length-prefixed payload with the existing rectangle
+protocol. Flush areas are split into 16-row rectangles. When every slot is in
+flight the flush waits for the transport to release one, then continues with
+the remaining rows. The included TFTs use a fixed 3-second host-inactivity
 watchdog.
 
 The current component services UART records and heartbeats in a task pinned to
 ESP32 core 0. Rendering and API actions remain on the ESPHome main loop. A
-recursive lock protects the framebuffer and session state; queued touch samples
+recursive lock protects the queue and session state; queued touch samples
 return to the main loop before entering ESPHome's touchscreen code. The STM
 watchdog remains the recovery path if the transport task itself stops.
 
-When LVGL is present, the display tracks refresh start and ready events. It
-holds new framebuffer snapshots from the first flush of a refresh until all
-flush callbacks in that refresh have completed, so one LVGL paint is never
-split into mid-refresh snapshots. The transport can keep sending during
-rendering before the first flush.
-For ESPHome display lambdas and display pages, the component applies the same
-gate around the complete `update()` call. The transport task continues handling
-UART traffic while the writer runs.
+When LVGL is present, the display tracks refresh start and ready events. Since
+nothing is mirrored, entering the stream invalidates the active screen so LVGL
+repaints and the flush areas are queued again. The transport may send queued
+areas while LVGL renders the next band.
+For ESPHome display lambdas and display pages, the same path is used: the
+transport task continues handling UART traffic while the writer runs.
 
 `brightness` under `display:` optionally sets the initial backlight level from 0
 to 100. At runtime call `id(panel).request_brightness(percent)`, where `percent`

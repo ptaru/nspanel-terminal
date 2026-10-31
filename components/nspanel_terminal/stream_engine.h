@@ -40,8 +40,8 @@ class StreamEngine {
     return true;
   }
   bool submit_cached(unsigned x, unsigned y, unsigned w, unsigned h, const uint8_t *snapshot,
-                     const uint8_t *cache, size_t cache_size, uint32_t now) {
-    if (!cache || !cache_size || !submit(x, y, w, h, snapshot, now)) return false;
+                     const uint8_t *cache, size_t cache_size, uint32_t now, bool final = true) {
+    if (!cache || !cache_size || !submit(x, y, w, h, snapshot, now, final)) return false;
     cache_ = cache;
     cache_size_ = cache_size;
     cache_at_ = 0;
@@ -292,10 +292,6 @@ struct DirtyRows {
     const unsigned first = x / TILE;
     const unsigned last = (std::min<unsigned>(width, x + w) - 1) / TILE;
     rows[y] |= (full >> (columns - (last - first + 1))) << first;
-  }
-  // Apply a ready-made tile mask for one row, as returned by scan_dirty_row().
-  void merge(unsigned y, uint64_t mask) {
-    if (y < height) rows[y] |= mask & full;
   }
   void all() {
     next = 0;
