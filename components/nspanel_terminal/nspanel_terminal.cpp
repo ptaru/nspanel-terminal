@@ -23,10 +23,19 @@ static const char *const TAG = "nspanel_terminal";
 NSPanelDisplay::~NSPanelDisplay() {
   task_stop_ = true;
   while (task_running_) vTaskDelay(1);
+  // The upload task owns the UART while it runs; do not free the slot storage
+  // underneath it.
+  while (upload_running_) vTaskDelay(1);
   RAMAllocator<uint8_t>().deallocate(benchmark_cache_, size_t(width_) * height_ * 2 + 8192);
   RAMAllocator<uint8_t>().deallocate(benchmark_snapshot_, size_t(width_) * height_ * 2);
   if (job_storage_) RAMAllocator<uint8_t>().deallocate(job_storage_, job_capacity_ * JOB_SLOTS);
   job_storage_ = nullptr;
+}
+uart::IDFUARTComponent *NSPanelDisplay::idf_uart_() const {
+  // ESPHome 2026.10 selects IDFUARTComponent for every ESP32 configuration,
+  // including framework: arduino. only_on_esp32() and UART_DEVICE_SCHEMA make
+  // this the only possible parent type.
+  return static_cast<uart::IDFUARTComponent *>(parent_);
 }
 bool NSPanelDisplay::init_frame_jobs_() {
   // LVGL allocates its draw buffer during setup; allocate the slots only when
@@ -51,17 +60,29 @@ bool NSPanelDisplay::init_frame_jobs_() {
   return true;
 }
 NSPanelDisplay::FrameJob *NSPanelDisplay::acquire_job_(std::unique_lock<std::recursive_mutex> &lock) {
+  // Bound the wait so a stalled receiver cannot hold the main loop for the
+  // whole reverse timeout. Feed the task watchdog while yielding to the
+  // transport task.
+  const uint32_t started = millis();
   while (job_storage_ && state_ == State::STREAM) {
     for (auto &job : jobs_)
       if (job.state == 0) {
         job.state = 1;
         return &job;
       }
+    if (millis() - started >= 250) return nullptr;
     lock.unlock();
+    App.feed_wdt();
     vTaskDelay(pdMS_TO_TICKS(1));
     lock.lock();
   }
   return nullptr;
+}
+void NSPanelDisplay::drop_frame_(const char *reason) {
+  ++dropped_frames_;
+  if ((dropped_frames_ & 0x3f) == 1)
+    ESP_LOGW(TAG, "Dropped frame area: %s (%u total)", reason, dropped_frames_);
+  if (state_ == State::STREAM) repaint_pending_ = true;
 }
 void NSPanelDisplay::enqueue_job_(FrameJob *job) {
   job->state = 2;
@@ -126,7 +147,7 @@ void NSPanelDisplay::task_loop_() {
       incoming = -1;
     }
     if (streaming) {
-      auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+      auto *idf = idf_uart_();
       uint8_t b;
       if (uart_read_bytes(uart_port_t(idf->get_hw_serial_number()), &b, 1, pdMS_TO_TICKS(1)) == 1)
         incoming = b;
@@ -134,7 +155,7 @@ void NSPanelDisplay::task_loop_() {
   }
 }
 void NSPanelDisplay::dump_config() {
-  ESP_LOGCONFIG(TAG, "NSPanel protocol6/7 display, %ux%u RGB565, PSRAM, UART 4 Mbaud", unsigned(width_),
+  ESP_LOGCONFIG(TAG, "NSPanel protocol6/7 LVGL flush display, %ux%u RGB565, UART 4 Mbaud", unsigned(width_),
                 unsigned(height_));
   LOG_UPDATE_INTERVAL(this);
 }
@@ -205,6 +226,11 @@ void NSPanelDisplay::report_memory() {
            unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
            unsigned(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)), unsigned(JOB_SLOTS), unsigned(job_capacity_),
            frame_slots_internal_ ? "internal" : "external", unsigned(max_gap_us_ / 1000));
+  if (task_ != nullptr)
+    ESP_LOGI(TAG, "Transport: stack high-water=%u bytes, dropped frames=%u, dropped touches=%u, touch faults=%u, "
+                  "reverse shifts=%u",
+             unsigned(uxTaskGetStackHighWaterMark(task_)), dropped_frames_, dropped_touches_, stream_.touch_faults(),
+             stream_.reverse_shifts());
 }
 void NSPanelDisplay::start_render_benchmark(unsigned repeats) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -502,12 +528,15 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
   for (int first = 0; first < h; first += int(JOB_ROWS)) {
     const int rows = std::min<int>(JOB_ROWS, h - first);
     FrameJob *job = acquire_job_(lock);
-    if (!job) return;
+    if (!job) {
+      if (state_ == State::STREAM) drop_frame_("frame slot wait timed out");
+      return;
+    }
     const size_t size = encode_rows(ptr + size_t(y_offset + first) * source_stride, source_stride, x_offset,
                                     unsigned(w), unsigned(rows), job->cache, job_capacity_);
     if (!size) {
-      ESP_LOGE(TAG, "Frame-job encode overflow");
       job->state = 0;
+      drop_frame_("encode overflow");
       return;
     }
     job->x = uint16_t(x_start);
@@ -543,7 +572,7 @@ bool NSPanelDisplay::pump_command_() {
     return false;
   }
   if (!command_.empty()) {
-    auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+    auto *idf = idf_uart_();
     if (uart_wait_tx_done(uart_port_t(idf->get_hw_serial_number()), 0) != ESP_OK) return false;
     command_.clear();
     command_at_ = 0;
@@ -575,7 +604,7 @@ bool NSPanelDisplay::read_terminated_() {
   return false;
 }
 bool NSPanelDisplay::change_baud_(uint32_t baud) {
-  auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+  auto *idf = idf_uart_();
   if (uart_set_baudrate(uart_port_t(idf->get_hw_serial_number()), baud) != ESP_OK) return false;
   parent_->set_baud_rate(baud);
   return true;
@@ -627,6 +656,11 @@ void NSPanelDisplay::service_stream_(int incoming) {
     if (r.status == protocol::BRIGHTNESS_DONE)
       ESP_LOGI(TAG, "Live brightness ACK received");
     if (r.status == protocol::ERROR && !stream_.failed()) ++resyncs_;
+    if (r.freshness > 1 || (r.mask & 32)) {
+      if ((stream_.touch_faults() & 0x3f) == 1)
+        ESP_LOGW(TAG, "Touch controller fault ignored (freshness=%u, mask=0x%02x)", unsigned(r.freshness),
+                 unsigned(r.mask));
+    }
     if (stream_.completed() != completed) {
       if (render_repeat_active_ && render_last_write_us_) {
         render_stats_.done_wait_us += micros() - render_last_write_us_;
@@ -638,8 +672,10 @@ void NSPanelDisplay::service_stream_(int incoming) {
       if (measurement_active_) measurement_last_done_us_ = micros();
     }
     if (touchscreen_ && r.freshness == 1 && !pending_touches_.push(r.mask & 1, r.x, r.y)) {
-      fail_("touch edge queue overflow");
-      return;
+      ++dropped_touches_;
+      if ((dropped_touches_ & 0x3f) == 1)
+        ESP_LOGW(TAG, "Dropped touch sample because the main-loop queue is full (%u total)",
+                 dropped_touches_);
     }
   }
   if (stream_.failed()) {
@@ -647,7 +683,9 @@ void NSPanelDisplay::service_stream_(int incoming) {
     return;
   }
   if (stream_.stage() == StreamEngine::Stage::STOPPED) {
-    restore_page_ = stream_.mask() == 0;
+    // mask bit 5 is the receiver's sticky touch fault; it must not suppress
+    // restoration of the stock page after exit.
+    restore_page_ = (stream_.mask() & 0x1f) == 0;
     terminal_active_ = false;
     high_frequency_.stop();
     state_ = State::RECOVER_WAIT;
@@ -776,8 +814,9 @@ void NSPanelDisplay::service_stream_(int incoming) {
     const uint32_t encode_started = timed_encode ? micros() : 0;
     stream_.prepare(millis());
     if (active_job_ && stream_.stage() != StreamEngine::Stage::RECT &&
-        stream_.stage() != StreamEngine::Stage::DATA) {
-      // All DATA records for this rectangle are queued; the slot can be reused.
+        stream_.stage() != StreamEngine::Stage::DATA && stream_.cache_releasable()) {
+      // All DATA records for this rectangle are queued and no retry can still
+      // read the slot; the slot can be reused.
       release_active_job_();
     }
     if (benchmark_legacy_) benchmark_encode_us_ += micros() - encode_started;
@@ -803,7 +842,7 @@ void NSPanelDisplay::service_stream_(int incoming) {
       if (benchmark_legacy_ && stream_.pending()) {
         if (!allowance) {
           ++benchmark_credit_stalls_;
-          auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+          auto *idf = idf_uart_();
           if (uart_wait_tx_done(uart_port_t(idf->get_hw_serial_number()), 0) == ESP_OK)
             ++benchmark_idle_credit_stalls_;
         }
@@ -872,7 +911,7 @@ void NSPanelDisplay::finish_recovery_() {
   state_ = State::STOPPED;
   terminal_active_ = false;
   high_frequency_.stop();
-  ESP_LOGI(TAG, "UART restored to115200; terminal stopped");
+  ESP_LOGI(TAG, "UART restored to 115200; terminal stopped");
   if (startup_retry_ && !exit_requested_) request_enter();
 }
 void NSPanelDisplay::request_abandon() {
@@ -886,6 +925,10 @@ void NSPanelDisplay::request_abandon() {
 }
 void NSPanelDisplay::request_enter() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (upload_running_) {
+    ESP_LOGW(TAG, "TFT upload in progress; enter ignored");
+    return;
+  }
   // Frame slots are allocated when the stream starts, so a stopped terminal
   // must still be able to re-enter and retry the allocation.
   if (state_ != State::STOPPED) return;
@@ -905,8 +948,8 @@ void NSPanelDisplay::request_enter() {
 }
 void NSPanelDisplay::request_tft_upload() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
-  if (tft_url_.empty() || upload_pending_) {
-    ESP_LOGE(TAG, "TFT upload unavailable or already pending");
+  if (tft_url_.empty() || upload_pending_ || upload_running_) {
+    ESP_LOGE(TAG, "TFT upload unavailable or already running");
     return;
   }
   upload_pending_ = true;
@@ -980,7 +1023,7 @@ bool NSPanelDisplay::upload_tft_() {
     return false;
   }
   drain_();
-  auto *idf = static_cast<uart::IDFUARTComponent *>(parent_);
+  auto *idf = idf_uart_();
   const auto port = uart_port_t(idf->get_hw_serial_number());
   auto command = [this, port](const char *s) {
     write_str(s);
@@ -1029,7 +1072,16 @@ bool NSPanelDisplay::upload_tft_() {
     const uint32_t read_start = millis();
     while (read < count && millis() - read_start < 5000) {
       int n = esp_http_client_read(http, reinterpret_cast<char *>(buffer.data() + read), count - read);
-      if (n > 0) read += n;
+      if (n < 0) {
+        ESP_LOGE(TAG, "TFT range read failed at %u", unsigned(start));
+        esp_http_client_close(http);
+        esp_http_client_cleanup(http);
+        return false;
+      }
+      if (n > 0)
+        read += n;
+      else
+        vTaskDelay(pdMS_TO_TICKS(1));
       App.feed_wdt();
     }
     esp_http_client_close(http);
@@ -1056,8 +1108,40 @@ bool NSPanelDisplay::upload_tft_() {
   esp_http_client_cleanup(http);
   return true;
 }
+bool NSPanelDisplay::start_upload_task_() {
+  if (upload_running_ || upload_finished_) return false;
+  upload_running_ = true;
+  // The upload runs in its own task so the ESPHome main loop can service the
+  // API and OTA during the transfer. The transport task is already parked in
+  // STOPPED and does not touch the UART.
+  if (xTaskCreatePinnedToCore(upload_task_entry_, "nspanel_tft", 8192, this, 1, nullptr, 0) != pdPASS) {
+    upload_running_ = false;
+    return false;
+  }
+  return true;
+}
+void NSPanelDisplay::upload_task_entry_(void *arg) {
+  auto *self = static_cast<NSPanelDisplay *>(arg);
+  const bool ok = self->upload_tft_();
+  self->upload_ok_ = ok;
+  self->upload_finished_ = true;
+  self->upload_running_ = false;
+  vTaskDelete(nullptr);
+}
 void NSPanelDisplay::loop() {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
+  if (upload_finished_) {
+    upload_finished_ = false;
+    const bool ok = upload_ok_;
+    ESP_LOGI(TAG, "TFT upload %s", ok ? "complete" : "failed");
+    brightness_pending_ = true;  // Upload wakes the display at 100%; restore the selected level.
+    brightness_resume_ = true;
+    state_ = State::BOOT_WAIT;
+    exit_requested_ = false;
+    deadline_ = millis() + (ok ? 3000 : 1000);
+    return;
+  }
+  if (upload_running_) return;
 #ifdef USE_LVGL
   if (!refresh_hooks_installed_) {
     if (auto *display = lv_display_get_default()) {
@@ -1072,6 +1156,12 @@ void NSPanelDisplay::loop() {
     }
   }
 #endif
+  if (repaint_pending_ && state_ == State::STREAM && !refresh_active_ && !lvgl_refreshing_) {
+    // A dropped flush area or job wait must not leave stale pixels until the
+    // next unrelated redraw. Re-invalidate once the current refresh finishes.
+    repaint_pending_ = false;
+    request_repaint_();
+  }
   if (render_start_pending_ && !refresh_active_ && !lvgl_refreshing_) {
     render_start_pending_ = false;
     begin_render_repeat_();
@@ -1094,10 +1184,10 @@ void NSPanelDisplay::loop() {
       touch_reset_pending_ = false;
     }
     TouchSample sample;
-    if (pending_touches_.pop(sample)) {
-      if (!touchscreen_->new_report(sample.down, sample.x, sample.y)) {
-        fail_("touch report rejected");
-      }
+    if (pending_touches_.pop(sample) && !touchscreen_->new_report(sample.down, sample.x, sample.y)) {
+      ++dropped_touches_;
+      if ((dropped_touches_ & 0x3f) == 1)
+        ESP_LOGW(TAG, "Dropped invalid or queued touch sample (%u total)", dropped_touches_);
     }
   }
   const uint32_t loop_us = micros();
@@ -1394,13 +1484,14 @@ void NSPanelDisplay::loop() {
     case State::STOPPED:
       if (upload_pending_) {
         upload_pending_ = false;
-        const bool ok = upload_tft_();
-        ESP_LOGI(TAG, "TFT upload %s", ok ? "complete" : "failed");
-        brightness_pending_ = true;  // Upload wakes the display at 100%; restore the selected level.
-        brightness_resume_ = true;
-        state_ = State::BOOT_WAIT;
-        exit_requested_ = false;
-        deadline_ = millis() + (ok ? 3000 : 1000);
+        if (!start_upload_task_()) {
+          ESP_LOGE(TAG, "TFT upload task creation failed");
+          brightness_pending_ = true;
+          brightness_resume_ = true;
+          state_ = State::BOOT_WAIT;
+          exit_requested_ = false;
+          deadline_ = millis() + 1000;
+        }
       } else if (brightness_pending_) {
         brightness_pending_ = false;
         drain_();
@@ -1416,6 +1507,10 @@ void NSPanelDisplay::loop() {
 void NSPanelDisplay::on_shutdown() {
   task_stop_ = true;
   while (task_running_) vTaskDelay(1);
+  while (upload_running_) {
+    App.feed_wdt();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
   std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (state_ == State::STREAM && stream_.idle()) {
     stream_.request_exit();

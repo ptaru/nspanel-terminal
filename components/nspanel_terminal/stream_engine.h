@@ -1,4 +1,5 @@
 #pragma once
+#include <cstring>
 #include <optional>
 
 #include "protocol.h"
@@ -138,13 +139,30 @@ class StreamEngine {
   // Return true for each validated report, including ERROR and touch samples.
   bool feed(uint8_t b, uint32_t now, protocol::Reply &r) {
     if (failed() || stage_ == Stage::STOPPED) return false;
+    if (have_ == protocol::RESPONSE) {
+      // Defensive: invalid frames normally leave have_ at RESPONSE - 1.
+      std::memmove(rx_, rx_ + 1, protocol::RESPONSE - 1);
+      have_ = protocol::RESPONSE - 1;
+    }
     rx_[have_++] = b;
-    if (have_ != 32) return false;
-    have_ = 0;
+    if (have_ < protocol::RESPONSE) return false;
     if (!protocol::reply(rx_, session_, r)) {
-      fail("reverse integrity");
+      // The reverse report has an 'S','R' prefix but no COBS delimiter. A lost
+      // or inserted byte shifts every later fixed-size frame, so slide one byte
+      // and look for the next valid header instead of stopping the terminal.
+      // A sustained bad stream still fails on the reverse timeout below; cap
+      // consecutive misses so garbage cannot hide forever.
+      ++reverse_shifts_;
+      if (++reverse_misses_ > 64) {
+        fail("reverse integrity");
+        return false;
+      }
+      std::memmove(rx_, rx_ + 1, protocol::RESPONSE - 1);
+      have_ = protocol::RESPONSE - 1;
       return false;
     }
+    have_ = 0;
+    reverse_misses_ = 0;
     if (stage_ != Stage::READY && r.version != version_) {
       fail("reverse version changed");
       return false;
@@ -156,10 +174,15 @@ class StreamEngine {
     consumed_ = r.consumed;
     last_report_ = now;
     mask_ = r.mask;
-    if (r.flags || r.freshness > 1 || (r.mask & 32)) {
-      fail("receiver or touch fault");
+    if (r.flags) {
+      fail("receiver fault");
       return true;
     }
+    // A touch fault (malformed contact or Goodix I2C/ACK failure) is not a
+    // transport fault: the report still carries usable credit, and the next
+    // poll may return a valid contact. Keep the stream and skip the sample.
+    if (r.freshness > 1 || (r.mask & 32))
+      ++touch_faults_;
     if (r.status == protocol::READY || r.status == protocol::READY_BRIGHTNESS) {
       if (stage_ != Stage::READY || r.seq || r.consumed || r.rectangles) {
         fail("unexpected READY");
@@ -227,6 +250,14 @@ class StreamEngine {
   // BETWEEN is reached only after all pixels were encoded. Reuse the snapshot
   // after the END record is fully queued; receiver work remains credit bounded.
   bool can_submit() const { return (stage_ == Stage::IDLE || stage_ == Stage::BETWEEN) && !pending(); }
+  // A cached payload may be read again by an ERROR retry until the DONE reply.
+  // The caller must keep the frame slot while this is false. Burst and
+  // non-final rectangles cannot retry (feed() rejects their ERROR), so their
+  // slot is safe to release as soon as END is queued.
+  bool cache_releasable() const {
+    if (!cached_ || stage_ == Stage::IDLE || stage_ == Stage::FAILED || stage_ == Stage::STOPPED) return true;
+    return burst_rects_ > 1 || !final_;
+  }
   unsigned burst_rectangles() const { return burst_rects_; }
   unsigned version() const { return version_; }
   bool failed() const { return stage_ == Stage::FAILED; }
@@ -236,6 +267,8 @@ class StreamEngine {
   unsigned completed() const { return completed_; }
   uint32_t sent_bytes() const { return sent_; }
   unsigned heartbeats() const { return heartbeats_; }
+  unsigned touch_faults() const { return touch_faults_; }
+  unsigned reverse_shifts() const { return reverse_shifts_; }
   const char *error() const { return error_; }
 
  private:
@@ -254,8 +287,9 @@ class StreamEngine {
   std::optional<protocol::Encoder<Pixels>> encoder_;
   std::vector<uint8_t> tx_, body_, raw_;
   size_t at_ = 0;
-  uint8_t rx_[32]{};
+  uint8_t rx_[protocol::RESPONSE]{};
   unsigned have_ = 0;
+  unsigned touch_faults_ = 0, reverse_shifts_ = 0, reverse_misses_ = 0;
   const char *error_ = "none";
 };
 

@@ -78,6 +78,8 @@ uart:
   rx_pin: GPIO17
   baud_rate: 115200
   rx_buffer_size: 4096
+  tx_buffer_size: 2048
+  rx_full_threshold: 32
 
 display:
   - platform: nspanel_terminal
@@ -94,6 +96,7 @@ touchscreen:
   - platform: nspanel_terminal
     id: panel_touch
     display: panel
+    # Kept for the v0.7.0 example pin; display: is authoritative.
     panel_id: panel
     calibration:
       x_min: 0

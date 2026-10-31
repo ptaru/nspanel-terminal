@@ -11,6 +11,11 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/helpers.h"
 #include "stream_engine.h"
+
+namespace esphome::uart {
+class IDFUARTComponent;
+}
+
 namespace esphome::nspanel_terminal {
 class NSPanelTouchscreen;
 class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
@@ -131,6 +136,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool repaint_pending_ = true;
   bool unsupported_logged_ = false;
   bool frame_slots_internal_ = false;
+  uart::IDFUARTComponent *idf_uart_() const;
   void send_command_(const char *);
   void send_query_(State, const char *);
   bool pump_command_();
@@ -150,9 +156,12 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   void clear_jobs_();
   bool job_queue_empty_() const { return job_queued_ == 0; }
   void request_repaint_();
+  void drop_frame_(const char *reason);
   void invalidate_screen_();
   bool upload_tft_();
   bool upload_ack_(uint32_t &position, uint32_t expected);
+  bool start_upload_task_();
+  static void upload_task_entry_(void *arg);
   State state_ = State::BOOT_WAIT;
   uint32_t deadline_ = 0, next_command_byte_ = 0;
   uint8_t config_step_ = 0, recovery_step_ = 0, page_ = 0, saved_bkcmd_ = 3;
@@ -174,6 +183,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool touch_reset_pending_ = false;
   bool diagnostics_ = false;
   unsigned resyncs_ = 0, faults_ = 0;
+  unsigned dropped_touches_ = 0, dropped_frames_ = 0;
   uint32_t submit_ms_ = 0, last_loop_us_ = 0, max_gap_us_ = 0, abandon_deadline_ = 0;
   bool abandon_requested_ = false;
   bool upload_pending_ = false;
@@ -246,6 +256,9 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   mutable std::recursive_mutex mutex_;
   std::atomic<bool> task_stop_{false};
   std::atomic<bool> task_running_{false};
+  std::atomic<bool> upload_running_{false};
+  std::atomic<bool> upload_finished_{false};
+  std::atomic<bool> upload_ok_{false};
   TaskHandle_t task_ = nullptr;
   bool refresh_active_ = false;
   bool lvgl_refreshing_ = false;

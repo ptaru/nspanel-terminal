@@ -10,7 +10,6 @@ from esphome.const import (
     CONF_LAMBDA,
     CONF_PAGES,
     CONF_ROTATION,
-    CONF_UART_ID,
     CONF_WIDTH,
 )
 
@@ -39,14 +38,34 @@ def validate_config(config):
             f"Unsupported panel size {size[0]}x{size[1]}; use 454x320 for the "
             "EU landscape panel or 320x480 for the US portrait panel"
         )
+    # 0.7.0 streams LVGL flush areas directly and no longer owns a framebuffer.
+    # The DisplayBuffer writer path would silently render nothing, so reject it
+    # here instead of exposing a config that cannot work.
+    unsupported = []
+    if CONF_LAMBDA in config:
+        unsupported.append("lambda")
+    if CONF_PAGES in config:
+        unsupported.append("pages")
+    if config.get(CONF_AUTO_CLEAR_ENABLED) is True:
+        unsupported.append("auto_clear_enabled: true")
+    if config.get(display.CONF_SHOW_TEST_CARD):
+        unsupported.append("show_test_card")
+    if unsupported:
+        raise cv.Invalid(
+            "nspanel_terminal only supports LVGL flush streaming; "
+            f"{', '.join(unsupported)} would write to a framebuffer that no longer exists"
+        )
+    if config.get(CONF_ROTATION, 0):
+        raise cv.Invalid(
+            "nspanel_terminal only supports rotation 0; set rotation under lvgl: instead"
+        )
     display.add_metadata(
         config[CONF_ID],
         config[CONF_WIDTH],
         config[CONF_HEIGHT],
         byte_order=BYTE_ORDER_LITTLE,
-        has_writer=bool(config.get(CONF_LAMBDA) or config.get(CONF_PAGES))
-        or config.get(CONF_AUTO_CLEAR_ENABLED) is True,
-        rotation=config.get(CONF_ROTATION, 0),
+        has_writer=False,
+        rotation=0,
     )
     return config
 
@@ -66,12 +85,21 @@ CONFIG_SCHEMA = cv.All(
     validate_config,
 )
 
+# The terminal changes the UART to 4 Mbaud after entry and restores 115200
+# during recovery. Recovery cannot work if the bus is configured differently.
+FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
+    "nspanel_terminal",
+    baud_rate=115200,
+    require_tx=True,
+    require_rx=True,
+    data_bits=8,
+    parity="NONE",
+    stop_bits=1,
+)
+
 
 async def to_code(config):
     include_builtin_idf_component("esp_http_client")
-    uart_parent = await cg.get_variable(config[CONF_UART_ID])
-    cg.add(uart_parent.set_tx_buffer_size(2048))
-    cg.add(uart_parent.set_rx_full_threshold(32))
     var = cg.new_Pvariable(config[CONF_ID])
     cg.add(var.set_panel_size(config[CONF_WIDTH], config[CONF_HEIGHT]))
     cg.add(var.set_diagnostics(config[CONF_DIAGNOSTICS]))
@@ -81,8 +109,3 @@ async def to_code(config):
         cg.add(var.set_initial_brightness(config[CONF_BRIGHTNESS]))
     await display.register_display(var, config)
     await uart.register_uart_device(var, config)
-    if CONF_LAMBDA in config:
-        writer = await cg.process_lambda(
-            config[CONF_LAMBDA], [(display.DisplayRef, "it")], return_type=cg.void
-        )
-        cg.add(var.set_writer(writer))

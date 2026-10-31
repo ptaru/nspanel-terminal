@@ -34,3 +34,5 @@ test:
 	./build/check-frame-encode
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_encoding.cpp -o build/check-encoding
 	./build/check-encoding
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_stream_lifetime.cpp -o build/check-stream-lifetime
+	./build/check-stream-lifetime

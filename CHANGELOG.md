@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+- Keep a cached frame slot until the rectangle's DONE reply so an `ERROR`
+  retry cannot race a reused slot; burst and non-final rectangles remain
+  releasable at END.
+- Resynchronize the fixed 32-byte reverse report stream after a lost or
+  inserted byte instead of failing the terminal on the first bad frame.
+- Ignore malformed or Goodix-faulted touch reports and drop out-of-range or
+  queued touches instead of stopping the stream.
+- Reject display `lambda:`, `pages:`, `auto_clear_enabled: true`,
+  `show_test_card: true` and non-zero `rotation`; the component is LVGL-only.
+- Require a 115200 8N1 UART with TX and RX through final validation, and stop
+  overriding the shared UART's TX buffer and RX threshold.
+- Make the standard touchscreen `display:` key authoritative and deprecate
+  `panel_id`.
+- Run TFT uploads in a separate task, abort the range read on a negative
+  result, bound frame-slot waits, repaint dropped areas, and report the
+  transport task's stack high-water mark.
+
 ## 0.7.0 — 2026-10-31
 
 - Replace the 290 KB full-frame framebuffer mirror with flush-area streaming:

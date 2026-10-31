@@ -12,7 +12,10 @@ void NSPanelTouchscreen::set_panel(NSPanelDisplay *panel) {
 }
 
 bool NSPanelTouchscreen::new_report(bool down, uint16_t x, uint16_t y) {
-  if (down && panel_ && (x >= panel_->width() || y >= panel_->height())) return false;
+  if (down && panel_ && (x >= panel_->width() || y >= panel_->height())) {
+    ++drops_;
+    return false;
+  }
   ++edges_;
   if (down != last_reported_) {
     last_reported_ = down;
