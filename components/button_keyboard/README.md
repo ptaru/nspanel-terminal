@@ -1,23 +1,79 @@
 # button_keyboard
 
-A text-entry keyboard for ESPHome LVGL built from one `lv_button` per key. It
-provides the stock four keyboard layouts and textarea editing, but a key press
-invalidates only that key instead of the whole keyboard.
+An optional text-entry keyboard for ESPHome LVGL built from one `lv_button`
+per key. It provides four stock-style layouts and textarea editing, with
+individual objects for styling and small key redraws. It works independently
+of the NSPanel terminal.
 
-## Why it exists
+## Try the stock keyboard first
 
-ESPHome's `lvgl.keyboard` is one `lv_buttonmatrix` object. LVGL's base handler
-puts `LV_STATE_PRESSED` on the whole matrix when any key is pressed, so every
-tap invalidates the entire keyboard. On a display where a full redraw is slow
-or bandwidth-limited, that can dominate the cost of typing.
+The stock `lvgl.keyboard` can also redraw individual keys. With the default
+pressed-state styles, LVGL marks the whole matrix dirty when its pressed state
+changes. Removing those styles avoids that redraw; a draw-task callback restores
+visible feedback for the selected key. This needs no external component:
 
-`button_keyboard` creates separate buttons for the keys. A press invalidates
-one button, and the bound textarea invalidates only the text that changes. The
-layouts, insertion rules and ready/cancel behaviour follow LVGL 9's
-`lv_keyboard`.
+```yaml
+lvgl:
+  pages:
+    - id: text_page
+      widgets:
+        - textarea:
+            id: text_input
+            x: 10
+            y: 10
+            width: 434
+            height: 64
+        - keyboard:
+            id: kb
+            textarea: text_input
+            align: TOP_LEFT
+            x: 0
+            y: 82
+            width: 454
+            height: 230
 
-It is independent of the NSPanel terminal: it works with any ESPHome LVGL
-display.
+esphome:
+  on_boot:
+    - priority: -100
+      then:
+        - lambda: |-
+            lv_obj_t *kb = id(kb)->obj;
+            lv_obj_remove_style(kb, nullptr,
+                                (lv_style_selector_t) LV_PART_ANY | (lv_style_selector_t) LV_STATE_PRESSED);
+            lv_obj_remove_flag(kb, LV_OBJ_FLAG_CLICK_FOCUSABLE);
+            lv_obj_add_flag(kb, LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS);
+            lv_obj_add_event_cb(kb, [](lv_event_t *e) {
+              lv_obj_t *obj = lv_event_get_target_obj(e);
+              if (!lv_obj_has_state(obj, LV_STATE_PRESSED)) return;
+              lv_draw_task_t *task = lv_event_get_draw_task(e);
+              auto *base = (lv_draw_dsc_base_t *) lv_draw_task_get_draw_dsc(task);
+              if (base->part != LV_PART_ITEMS ||
+                  base->id1 != lv_buttonmatrix_get_selected_button(obj)) return;
+              if (auto *fill = lv_draw_task_get_fill_dsc(task)) {
+                fill->color = lv_color_hex(0x4B5563);
+                fill->opa = LV_OPA_COVER;
+              }
+            }, LV_EVENT_DRAW_TASK_ADDED, nullptr);
+```
+
+Merge these entries into your existing configuration and use your own display
+geometry and colours. This example targets ESPHome 2026.10.1 / LVGL 9.5.0;
+draw-task events use `LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS` in that version.
+`align: TOP_LEFT` makes the coordinates relative to the page's top-left rather
+than the keyboard constructor's bottom alignment. Clearing click-focus keeps
+the textarea focused while typing. The boot lambda must run after widget
+creation, and pressed-state styles added later can reintroduce broad redraws.
+
+Local SDL checks confirmed key-sized press/release redraws, restored feedback,
+typing, backspace and layout switching. An EU panel trial booted successfully;
+the user preferred the custom component's feel, but latency was not measured.
+The matrix still pads individual-key invalidations by at least display DPI / 10;
+that margin is internal LVGL behaviour and cannot be reduced by this draw
+callback. Layout changes redraw the whole keyboard with either approach.
+
+Use the custom component below when you want separate key objects, ordinary
+per-button styles or configurable repeat timing. It uses more memory, and is
+not required merely to avoid whole-matrix pressed-state redraws.
 
 ## Requirements
 
@@ -215,7 +271,7 @@ symbols (`LV_SYMBOL_*`); character labels use the configured `font`.
 | Backspace, Enter, cursor, sign | yes | yes |
 | Press-and-hold repeat | yes | yes, configurable |
 | Ready/cancel events | LVGL events | LVGL events plus triggers |
-| Damage per key press | whole matrix | one button |
+| Damage per key press | whole matrix with default styles; key-sized with the workaround above | one button |
 | Popovers | C API only | not implemented |
 | Custom/user key maps | C API only | not implemented |
 
@@ -225,8 +281,8 @@ rather than an `lvgl:` widget.
 ## Memory
 
 Each key is an `lv_button` plus an `lv_label`, so the component uses more LVGL
-object memory than the single matrix used by `lvgl.keyboard`. The trade-off buys
-the smaller invalidation area. On a memory-constrained board, measure the
+object memory than the single matrix used by `lvgl.keyboard`. Individual objects offer
+direct per-key styling and avoid the matrix's extra invalidation padding. On a memory-constrained board, measure the
 LVGL heap and consider enabling PSRAM or reducing the keyboard size.
 
 ## License

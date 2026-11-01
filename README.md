@@ -37,9 +37,8 @@ builds both images from the original Sonoff images. See
 [display firmware internals](docs/FIRMWARE.md) for the implementation and
 [building](docs/BUILDING.md) for the toolchain and commands.
 
-Version 0.7.1 adds the standalone button keyboard and includes the post-0.7.0
-transport fixes and `frame_slots_ram`. The display path remains the 0.7.0
-flush-area streaming design. The TFTs are unchanged from 0.7.0; existing 0.7.0
+Version 0.7.1 includes the post-0.7.0 transport fixes and `frame_slots_ram`.
+The display path remains the 0.7.0 flush-area streaming design. The TFTs are unchanged from 0.7.0; existing 0.7.0
 installations only need an ESP32 firmware update.
 
 ## Install
@@ -92,14 +91,6 @@ not configure a separate Nextion component on that UART at the same time. If the
 host stops transmitting, the display watchdog returns to the blank page. The
 blank TFT does not contain the Sonoff UI.
 
-## Button keyboard
-
-The repository also includes [`button_keyboard`](components/button_keyboard/README.md),
-a standalone text-entry keyboard for ESPHome LVGL. It builds the keys from
-individual buttons instead of one `lv_buttonmatrix`, so a key press redraws one
-key rather than the whole keyboard. It follows the stock four layouts and
-editing behaviour, and works independently of the NSPanel terminal component.
-
 ## Build from source
 
 The display build is offline and needs only Python and a clang with the ARM
@@ -122,7 +113,7 @@ builder never uploads. See [building](docs/BUILDING.md) and the
 See [firmware internals](docs/FIRMWARE.md), [protocol](docs/PROTOCOL.md),
 [recovery](docs/RECOVERY.md),
 [terminal component configuration](components/nspanel_terminal/README.md),
-[button keyboard](components/button_keyboard/README.md),
+[optional keyboard component and stock-keyboard workaround](components/button_keyboard/README.md),
 [examples](examples/README.md), and [contributing](CONTRIBUTING.md). The TFT
 contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see
 [LICENSE](LICENSE).
