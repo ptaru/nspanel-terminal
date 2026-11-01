@@ -1,4 +1,5 @@
 #pragma once
+#include "frame_slot.h"
 #include <array>
 #include <vector>
 #include <string>
@@ -124,11 +125,10 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   // Flush areas are PackBits-encoded into these slots; the mirror is gone.
   static constexpr unsigned JOB_ROWS = 16;
   static constexpr unsigned JOB_SLOTS = 4;
-  struct FrameJob {
+  struct FrameJob : FrameSlot {
     uint8_t *cache = nullptr;
     size_t size = 0;
     uint16_t x = 0, y = 0, w = 0, h = 0;
-    uint8_t state = 0;  // 0 free, nonzero reserved/queued/active
   };
   std::array<FrameJob, JOB_SLOTS> jobs_{};
   uint8_t *job_storage_ = nullptr;
@@ -136,6 +136,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   unsigned job_queue_[JOB_SLOTS]{};
   unsigned job_head_ = 0, job_tail_ = 0, job_queued_ = 0;
   FrameJob *active_job_ = nullptr;
+  uint64_t job_generation_ = 0;
   bool repaint_pending_ = true;
   bool unsupported_logged_ = false;
   bool frame_slots_internal_ = false;
@@ -227,6 +228,8 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     uint32_t total_us = 0, refresh_us = 0, transfer_us = 0;
     uint32_t copy_us = 0, encode_us = 0, write_us = 0;
     uint32_t credit_wait_us = 0, uart_wait_us = 0, done_wait_us = 0;
+    uint32_t flush_work_us = 0, flush_max_us = 0, prepare_max_us = 0;
+    uint32_t service_last_us = 0, service_gap_max_us = 0;
     uint32_t bytes = 0;
     uint16_t rectangles = 0, credit_stalls = 0, uart_stalls = 0;
     uint16_t service_calls = 0, reports = 0, faults = 0, resyncs = 0;

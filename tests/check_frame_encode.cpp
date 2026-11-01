@@ -64,8 +64,24 @@ int main() {
     }
     const size_t size = encode_rows(source.data(), stride, x_offset, width, rows, cache.data(), capacity);
     assert(size > 0 && size <= capacity);
+    if (pattern == 0) {
+      // A solid 16-row strip fits one DATA body, including runs across rows.
+      const unsigned length = unsigned(cache[0]) | (unsigned(cache[1]) << 8);
+      assert(size == 2 + length);
+      assert(length == 3 * ((width * rows + 127) / 128));
+    }
     const auto decoded = decode({cache.begin(), cache.begin() + size}, width * rows);
     assert(decoded.size() == width * rows);
+    // Contiguous LVGL buffers must produce exactly the same DATA chunks.
+    std::vector<uint8_t> contiguous(width * rows * 2);
+    for (unsigned row = 0; row < rows; ++row)
+      std::memcpy(contiguous.data() + row * width * 2,
+                  source.data() + row * stride + 2 * x_offset, width * 2);
+    std::vector<uint8_t> direct(capacity);
+    const size_t direct_size = encode_rows(contiguous.data(), width * 2, 0, width, rows,
+                                           direct.data(), capacity);
+    assert(direct_size == size);
+    assert(std::memcmp(direct.data(), cache.data(), size) == 0);
     for (unsigned i = 0; i < decoded.size(); ++i) {
       const size_t at = 2 * x_offset + (i / width) * stride + 2 * (i % width);
       const uint16_t expected = uint16_t(source[at] | (source[at + 1] << 8));

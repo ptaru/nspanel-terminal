@@ -36,3 +36,7 @@ test:
 	./build/check-encoding
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_stream_lifetime.cpp -o build/check-stream-lifetime
 	./build/check-stream-lifetime
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_frame_slot.cpp -o build/check-frame-slot
+	./build/check-frame-slot
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_repeat_scan.cpp -o build/check-repeat-scan
+	./build/check-repeat-scan

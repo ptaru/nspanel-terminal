@@ -42,10 +42,12 @@ stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the
 reverse) fails safely instead of streaming into the wrong framebuffer.
 
 The component does not keep a full-frame mirror. Each LVGL flush area is
-PackBits-encoded into one of four slots and queued for the transport; the
-transport sends the length-prefixed payload with the existing rectangle
-protocol. Flush areas are split into 16-row rectangles. The slots allocate when
-the stream starts and prefer internal RAM, so LVGL's draw buffer is placed
+PackBits-encoded outside the transport lock into one of four reserved slots
+and queued for the transport, which sends the length-prefixed payload with
+the existing rectangle protocol. Flush areas are split into 16-row rectangles; DATA records and runs
+can cross row boundaries. Contiguous sources extend repeats with aligned
+32-bit comparisons, while strided sources keep the scalar path. The slots
+allocate when the stream starts and prefer internal RAM, so LVGL's draw buffer is placed
 first. When every slot is in flight the flush waits briefly for the transport to
 release one, then continues with the remaining rows. A timed-out area is
 dropped and a full repaint is scheduled instead of leaving stale pixels.
@@ -67,8 +69,11 @@ watchdog.
 
 The current component services UART records and heartbeats in a task pinned to
 ESP32 core 0. Rendering and API actions remain on the ESPHome main loop. A
-recursive lock protects the queue and session state; queued touch samples
-return to the main loop before entering ESPHome's touchscreen code. Out-of-range
+recursive lock protects the queue and session state. A reset invalidates the
+producer generation without recycling a slot while its encoder is writing.
+Retryable payloads remain reserved until DONE; completed slots are released
+before another job replaces their owner. Queued touch samples return to the
+main loop before entering ESPHome's touchscreen code. Out-of-range
 or queued touch samples are dropped, and a malformed Goodix report is ignored
 rather than stopping the stream. The STM watchdog remains the recovery path if
 the transport task itself stops.

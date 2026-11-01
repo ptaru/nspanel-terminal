@@ -90,6 +90,32 @@ int main() {
   run_to(burst, StreamEngine::Stage::DONE);
   assert(burst.cache_releasable());
 
+  // Raw snapshot retry must retain its slot just like cached input.
+  const uint8_t pixels[] = {0x34, 0x12, 0x34, 0x12};
+  StreamEngine raw;
+  raw.begin(SESSION, 0, 454, 320);
+  feed(raw, reply(protocol::READY, 0));
+  assert(raw.submit(0, 0, 2, 1, pixels, 1, true));
+  assert(!raw.cache_releasable());
+  run_to(raw, StreamEngine::Stage::DONE);
+  assert(!raw.cache_releasable());
+  feed(raw, reply(protocol::ERROR, raw.sent_bytes()));
+  assert(!raw.cache_releasable());
+  run_to(raw, StreamEngine::Stage::SYNCED);
+  feed(raw, reply(protocol::SYNCED, raw.sent_bytes()));
+  assert(!raw.cache_releasable());
+  run_to(raw, StreamEngine::Stage::DONE);
+  feed(raw, reply(protocol::DONE, raw.sent_bytes(), 1));
+  assert(raw.idle() && raw.cache_releasable());
+  // Release eligibility must be checked before submitting the next queued job:
+  // the new submit replaces snapshot_ and starts another retained lifetime.
+  assert(raw.can_submit());
+  assert(raw.submit(2, 0, 2, 1, pixels, 1, true));
+  assert(!raw.cache_releasable());
+  run_to(raw, StreamEngine::Stage::DONE);
+  feed(raw, reply(protocol::DONE, raw.sent_bytes(), 2));
+  assert(raw.can_submit() && raw.cache_releasable());
+
   // A dropped reverse byte shifts the fixed-size report stream. The parser
   // must slide to the next 'S','R' frame rather than fail the terminal.
   StreamEngine shifted;

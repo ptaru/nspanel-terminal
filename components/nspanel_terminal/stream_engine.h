@@ -13,6 +13,41 @@ class StreamEngine {
   struct Pixels {
     const uint8_t *data;
     uint16_t operator()(unsigned i) const { return protocol::get16(data + 2 * i); }
+    unsigned repeat_scan(unsigned start, unsigned count, uint16_t value) const {
+      const uint8_t *p = data + 2 * size_t(start);
+      unsigned done = 0;
+      // Odd byte addresses cannot be aligned by advancing whole RGB565 pixels.
+      if (uintptr_t(p) & 1) {
+        while (done < count && protocol::get16(p + 2 * done) == value) ++done;
+        return done;
+      }
+      if ((uintptr_t(p) & 2) && count) {
+        if (protocol::get16(p) != value) return 0;
+        p += 2; ++done;
+      }
+      uint32_t pair = uint32_t(value) | (uint32_t(value) << 16);
+#if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+      pair = __builtin_bswap32(pair);
+#endif
+      auto matches = [&](unsigned offset) {
+        uint32_t word;
+        std::memcpy(&word, __builtin_assume_aligned(p + offset, 4), sizeof word);
+        return word == pair;
+      };
+      while (count - done >= 8) {
+        if (!matches(0)) break;
+        p += 4; done += 2;
+        if (!matches(0)) break;
+        p += 4; done += 2;
+        if (!matches(0)) break;
+        p += 4; done += 2;
+        if (!matches(0)) break;
+        p += 4; done += 2;
+      }
+      while (count - done >= 2 && matches(0)) { p += 4; done += 2; }
+      while (done < count && protocol::get16(p) == value) { p += 2; ++done; }
+      return done;
+    }
   };
   void begin(unsigned session, uint32_t now, unsigned width, unsigned height) {
     *this = StreamEngine();
@@ -250,12 +285,12 @@ class StreamEngine {
   // BETWEEN is reached only after all pixels were encoded. Reuse the snapshot
   // after the END record is fully queued; receiver work remains credit bounded.
   bool can_submit() const { return (stage_ == Stage::IDLE || stage_ == Stage::BETWEEN) && !pending(); }
-  // A cached payload may be read again by an ERROR retry until the DONE reply.
+  // Cached payloads and raw snapshots may be read again by an ERROR retry until DONE.
   // The caller must keep the frame slot while this is false. Burst and
   // non-final rectangles cannot retry (feed() rejects their ERROR), so their
   // slot is safe to release as soon as END is queued.
   bool cache_releasable() const {
-    if (!cached_ || stage_ == Stage::IDLE || stage_ == Stage::FAILED || stage_ == Stage::STOPPED) return true;
+    if (stage_ == Stage::IDLE || stage_ == Stage::FAILED || stage_ == Stage::STOPPED) return true;
     return burst_rects_ > 1 || !final_;
   }
   unsigned burst_rectangles() const { return burst_rects_; }

@@ -70,8 +70,7 @@ NSPanelDisplay::FrameJob *NSPanelDisplay::acquire_job_(std::unique_lock<std::rec
   const uint32_t started = millis();
   while (job_storage_ && state_ == State::STREAM) {
     for (auto &job : jobs_)
-      if (job.state == 0) {
-        job.state = 1;
+      if (job.reserve()) {
         return &job;
       }
     if (millis() - started >= 250) return nullptr;
@@ -107,7 +106,8 @@ void NSPanelDisplay::release_active_job_() {
   active_job_ = nullptr;
 }
 void NSPanelDisplay::clear_jobs_() {
-  for (auto &job : jobs_) job.state = 0;
+  ++job_generation_;
+  for (auto &job : jobs_) job.cancel();
   job_head_ = job_tail_ = job_queued_ = 0;
   active_job_ = nullptr;
 }
@@ -342,6 +342,9 @@ void NSPanelDisplay::finish_render_repeat_() {
            repeat, render_repeats_, unsigned(st.copy_us), unsigned(st.encode_us), unsigned(st.write_us),
            unsigned(st.credit_wait_us), unsigned(st.credit_stalls), unsigned(st.uart_wait_us),
            unsigned(st.uart_stalls), unsigned(st.done_wait_us), unsigned(st.service_calls), unsigned(st.reports));
+  ESP_LOGI(TAG, "Encode probe %u/%u: flush_work=%u us flush_max=%u us prepare_max=%u us service_gap_max=%u us",
+           repeat, render_repeats_, unsigned(st.flush_work_us), unsigned(st.flush_max_us),
+           unsigned(st.prepare_max_us), unsigned(st.service_gap_max_us));
   ++render_index_;
   if (render_index_ < render_repeats_) {
     render_start_pending_ = true;
@@ -536,8 +539,28 @@ void NSPanelDisplay::draw_pixels_at(int x_start, int y_start, int w, int h, cons
       if (state_ == State::STREAM) drop_frame_("frame slot wait timed out");
       return;
     }
+    const uint64_t generation = job_generation_;
+    uint8_t *const cache = job->cache;
+    const size_t capacity = job_capacity_;
+    const bool measure_flush = render_repeat_active_;
+    lock.unlock();
+    const uint32_t flush_started = measure_flush ? micros() : 0;
     const size_t size = encode_rows(ptr + size_t(y_offset + first) * source_stride, source_stride, x_offset,
-                                    unsigned(w), unsigned(rows), job->cache, job_capacity_);
+                                    unsigned(w), unsigned(rows), cache, capacity);
+    const uint32_t flush_elapsed = measure_flush ? micros() - flush_started : 0;
+    lock.lock();
+    if (measure_flush && render_repeat_active_) {
+      render_stats_.flush_work_us += flush_elapsed;
+      render_stats_.flush_max_us = std::max(render_stats_.flush_max_us, flush_elapsed);
+    }
+    if (!job->finish_encoding(generation, job_generation_)) {
+      drop_frame_("encode cancelled by stream reset");
+      return;
+    }
+    if (state_ != State::STREAM || exit_requested_) {
+      job->state = 0;
+      return;
+    }
     if (!size) {
       job->state = 0;
       drop_frame_("encode overflow");
@@ -632,6 +655,12 @@ bool NSPanelDisplay::identity_ok_(const char *reply) const {
 }
 void NSPanelDisplay::service_stream_(int incoming) {
   uint32_t started = micros();
+  if (render_repeat_active_) {
+    if (render_stats_.service_last_us)
+      render_stats_.service_gap_max_us = std::max(render_stats_.service_gap_max_us,
+                                                uint32_t(started - render_stats_.service_last_us));
+    render_stats_.service_last_us = started;
+  }
   uint8_t bytes[257];
   size_t n = incoming >= 0 ? 1 : 0;
   if (n) bytes[0] = uint8_t(incoming);
@@ -790,10 +819,14 @@ void NSPanelDisplay::service_stream_(int incoming) {
     }
   }
   do {
+    // Release a completed owner before submit() replaces snapshot_/active_job_.
+    if (active_job_ && stream_.can_submit() && stream_.cache_releasable()) release_active_job_();
     if (stream_.can_submit() && !benchmark_active_ && !exit_requested_) {
       FrameJob *job = dequeue_job_();
       if (job) {
-        const bool final = job_queue_empty_() || stream_.burst_rectangles() >= 255;
+        const bool encoding = std::any_of(jobs_.begin(), jobs_.end(),
+                                          [](const FrameJob &slot) { return slot.encoding(); });
+        const bool final = (job_queue_empty_() && !encoding) || stream_.burst_rectangles() >= 255;
         if (!stream_.submit_cached(job->x, job->y, job->w, job->h, job->cache, job->cache, job->size, millis(),
                                    final)) {
           clear_jobs_();
@@ -824,7 +857,11 @@ void NSPanelDisplay::service_stream_(int incoming) {
       release_active_job_();
     }
     if (benchmark_legacy_) benchmark_encode_us_ += micros() - encode_started;
-    if (render_repeat_active_) render_stats_.encode_us += micros() - encode_started;
+    if (render_repeat_active_) {
+      const uint32_t elapsed = micros() - encode_started;
+      render_stats_.encode_us += elapsed;
+      render_stats_.prepare_max_us = std::max(render_stats_.prepare_max_us, elapsed);
+    }
     if (stream_.failed()) {
       fail_(stream_.error());
       return;

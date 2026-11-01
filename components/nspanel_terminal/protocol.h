@@ -1,5 +1,7 @@
 #pragma once
 #include <algorithm>
+#include <type_traits>
+#include <utility>
 #include <array>
 #include <cstdint>
 #include <string>
@@ -86,6 +88,10 @@ inline std::vector<uint8_t> record(unsigned session, unsigned seq, unsigned kind
 }
 /* A sequential source is read exactly once per pixel. Two-pixel lookahead
  * survives record boundaries; output buffers are reused by the caller. */
+template <class T, class = void> struct HasRepeatScan : std::false_type {};
+template <class T>
+struct HasRepeatScan<T, std::void_t<decltype(std::declval<T &>().repeat_scan(0u, 0u, uint16_t{}))>>
+    : std::true_type {};
 template <class Pixel>
 class Encoder {
   Pixel pixel;
@@ -139,15 +145,22 @@ class Encoder {
         unsigned run = 2;
         u += 2;
         n = 0;
-        while (run < 128 && g < limit) {
-          auto candidate = uint16_t(pixel(g++));
-          if (candidate != v) {
-            a = candidate;
-            n = 1;
-            break;
+        if constexpr (HasRepeatScan<Pixel>::value) {
+          const unsigned extra = pixel.repeat_scan(g, std::min(128u - run, limit - g), v);
+          g += extra;
+          u += extra;
+          run += extra;
+        } else {
+          while (run < 128 && g < limit) {
+            auto candidate = uint16_t(pixel(g++));
+            if (candidate != v) {
+              a = candidate;
+              n = 1;
+              break;
+            }
+            ++run;
+            ++u;
           }
-          ++run;
-          ++u;
         }
         refill();
         dest[size++] = uint8_t(127 + run);

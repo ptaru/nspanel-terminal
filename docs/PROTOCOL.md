@@ -249,12 +249,12 @@ consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group.
 Only the final END emits DONE. PROGRESS byte credits and touch reports continue
 throughout; the 512-byte window and 1 KiB DMA ring are unchanged.
 
-The production sender closes a burst when its dirty map drains or after 256
-rectangles, so ongoing drawing cannot postpone acknowledgements indefinitely.
-New drawing remains dirty if it arrives after a rectangle is copied. The host
-reuses its strip snapshot only after that rectangle's END has been queued in
-full. The 8-pixel tile granularity can still include unchanged pixels inside
-a dirty tile.
+The production sender closes a burst when its queued flush areas and reserved
+producer slots drain, or after 255 rectangles, so ongoing drawing cannot postpone
+acknowledgements indefinitely. Each LVGL flush is encoded into
+16-row strips; DATA records may cross row boundaries. The host reuses a strip only after END has been queued in full and
+no retry can read it. A single final rectangle can retry, so its snapshot remains
+reserved until DONE. Non-final and multi-rectangle bursts cannot retry.
 
 DONE must match the expected cumulative rectangle count, modulo 65536. A
 protocol error in a multi-rectangle burst stops the session and marks the whole
