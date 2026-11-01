@@ -2,7 +2,9 @@
 
 This ESPHome component implements an RGB565 display and single-pointer
 touchscreen for the EU and US NSPanel terminal. It requires ESPHome
-2026.10.x and exclusive ownership of the display UART; PSRAM is optional. See
+2026.10.x, LVGL for UI rendering and exclusive ownership of the display UART;
+PSRAM is optional. Standard ESPHome display `lambda:` and `pages:` rendering
+are unsupported in the current version. See
 [the EU example](../../examples/panel.yaml) and
 [the US example](../../examples/panel-us.yaml) for wiring, LVGL and API actions.
 
@@ -86,7 +88,9 @@ LVGL renders the next band.
 The component requires LVGL. ESPHome display `lambda:`, `pages:`,
 `auto_clear_enabled: true` and `show_test_card: true` are rejected at
 validation because they would draw into a framebuffer that no longer exists.
-Use LVGL widgets and `lvgl.page.show` instead.
+Use LVGL widgets and `lvgl.page.show` instead. This does not prohibit lambdas
+in automations. For the temporary v0.6.0 sender pin, PSRAM requirements and
+matching TFT details, see [rendering compatibility](../../README.md#rendering-compatibility).
 
 `brightness` under `display:` optionally sets the initial backlight level from 0
 to 100. At runtime call `id(panel).request_brightness(percent)`, where `percent`

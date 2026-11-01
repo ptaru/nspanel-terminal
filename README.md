@@ -4,7 +4,9 @@ Release 0.7.1.
 
 
 Turn an EU or US Sonoff NSPanel into a general-purpose ESPHome display and
-touchscreen. ESPHome draws the interface on the ESP32 and sends it to the
+touchscreen. The current version requires LVGL for UI rendering; standard ESPHome
+display `lambda:` and `pages:` rendering are not supported. ESPHome draws the
+interface on the ESP32 and sends it to the
 panel's screen over the internal serial link. The supplied display image
 replaces the Sonoff interface with a blank "waiting for connection" page, which
 is shown when the terminal is not running. This project is experimental and
@@ -40,6 +42,36 @@ builds both images from the original Sonoff images. See
 Version 0.7.1 includes the post-0.7.0 transport fixes and `frame_slots_ram`.
 The display path remains the 0.7.0 flush-area streaming design. The TFTs are unchanged from 0.7.0; existing 0.7.0
 installations only need an ESP32 firmware update.
+
+## Rendering compatibility
+
+Version 0.7.0 and later stream LVGL flush areas directly, without a full-screen
+framebuffer. Use `lvgl:` widgets and `lvgl.page.show` for the UI. Standard
+ESPHome display `lambda:` and `pages:` rendering no longer work; v0.7.1 and
+current development code reject them during configuration validation. This
+restriction concerns display rendering, not lambdas used in automations.
+
+For a temporary legacy option, pin the `nspanel_terminal` external component to
+`v0.6.0`, the last release containing the framebuffer and display lambda/page
+writer path:
+
+```yaml
+external_components:
+  - source: github://ptaru/nspanel-terminal@v0.6.0
+    components: [nspanel_terminal]
+```
+
+Use the v0.6.0 configuration and component documentation as the starting point;
+that release requires `psram:` and retains a full framebuffer plus a transfer
+snapshot. For lambda rendering, replace the example's `lvgl:` UI with a display
+`lambda:` and a finite `update_interval` instead of `never`.
+
+The EU and US TFT files in v0.6.0 are byte-identical to those in v0.7.1
+(native 93 / protocol 7), so an existing matching v0.7.1 TFT does not need to be
+replaced for this sender pin. Otherwise, use the TFT for your panel from the
+v0.6.0 tag. The pin predates the later transport lifetime and recovery fixes;
+it is a legacy compatibility option, not a new hardware validation of lambda
+rendering. US hardware remains untested.
 
 ## Install
 

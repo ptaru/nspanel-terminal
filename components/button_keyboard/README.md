@@ -13,25 +13,6 @@ changes. Removing those styles avoids that redraw; a draw-task callback restores
 visible feedback for the selected key. This needs no external component:
 
 ```yaml
-lvgl:
-  pages:
-    - id: text_page
-      widgets:
-        - textarea:
-            id: text_input
-            x: 10
-            y: 10
-            width: 434
-            height: 64
-        - keyboard:
-            id: kb
-            textarea: text_input
-            align: TOP_LEFT
-            x: 0
-            y: 82
-            width: 454
-            height: 230
-
 esphome:
   on_boot:
     - priority: -100
@@ -56,20 +37,11 @@ esphome:
             }, LV_EVENT_DRAW_TASK_ADDED, nullptr);
 ```
 
-Merge these entries into your existing configuration and use your own display
-geometry and colours. This example targets ESPHome 2026.10.1 / LVGL 9.5.0;
-draw-task events use `LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS` in that version.
-`align: TOP_LEFT` makes the coordinates relative to the page's top-left rather
-than the keyboard constructor's bottom alignment. Clearing click-focus keeps
-the textarea focused while typing. The boot lambda must run after widget
-creation, and pressed-state styles added later can reintroduce broad redraws.
-
-Local SDL checks confirmed key-sized press/release redraws, restored feedback,
-typing, backspace and layout switching. An EU panel trial booted successfully;
-the user preferred the custom component's feel, but latency was not measured.
-The matrix still pads individual-key invalidations by at least display DPI / 10;
-that margin is internal LVGL behaviour and cannot be reduced by this draw
-callback. Layout changes redraw the whole keyboard with either approach.
+Merge these entries into your existing configuration. This example targets 
+ESPHome 2026.10.1 / LVGL 9.5.0; draw-task events use 
+`LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS` in that version. The boot lambda must run 
+after widget creation, and pressed-state styles added later can reintroduce
+broad redraws.
 
 Use the custom component below when you want separate key objects, ordinary
 per-button styles or configurable repeat timing. It uses more memory, and is
