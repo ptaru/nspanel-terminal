@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add `button_keyboard`, an LVGL text-entry keyboard built from individual
+  buttons so a press invalidates one key instead of the whole keyboard. It
+  provides the stock four layouts, repeatable keys, ready/cancel triggers and
+  textarea editing without depending on the NSPanel terminal transport.
 - Keep a cached frame slot until the rectangle's DONE reply so an `ERROR`
   retry cannot race a reused slot; burst and non-final rectangles remain
   releasable at END.

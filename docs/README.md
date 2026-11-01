@@ -11,6 +11,8 @@ Start with the [README](../README.md) for installation and everyday use.
 - [Recovery](RECOVERY.md): failed updates, blank pages and troubleshooting.
 
 Component configuration is in
-[`components/nspanel_terminal/README.md`](../components/nspanel_terminal/README.md);
-the examples are in [`examples/`](../examples/), and contribution rules are in
+[`components/nspanel_terminal/README.md`](../components/nspanel_terminal/README.md).
+The standalone [`button_keyboard`](../components/button_keyboard/README.md)
+component provides a text-entry keyboard for LVGL. The examples are in
+[`examples/`](../examples/), and contribution rules are in
 [`CONTRIBUTING.md`](../CONTRIBUTING.md).

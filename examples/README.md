@@ -15,6 +15,13 @@ The US TFT and configuration are offline-validated but have not yet been run on
 US hardware. Follow the [installation steps](../README.md#install) and review the
 pin and PSRAM configuration before flashing.
 
+## Button keyboard
+
+The repository also contains a standalone
+[`button_keyboard`](../components/button_keyboard/README.md) component for
+ESPHome LVGL. It is not required by these panel examples; add it separately if
+your UI needs a text-entry keyboard that redraws only the pressed key.
+
 ## Working on the component
 
 To test local edits instead of the release, replace the `external_components`

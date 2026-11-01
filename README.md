@@ -91,6 +91,14 @@ not configure a separate Nextion component on that UART at the same time. If the
 host stops transmitting, the display watchdog returns to the blank page. The
 blank TFT does not contain the Sonoff UI.
 
+## Button keyboard
+
+The repository also includes [`button_keyboard`](components/button_keyboard/README.md),
+a standalone text-entry keyboard for ESPHome LVGL. It builds the keys from
+individual buttons instead of one `lv_buttonmatrix`, so a key press redraws one
+key rather than the whole keyboard. It follows the stock four layouts and
+editing behaviour, and works independently of the NSPanel terminal component.
+
 ## Build from source
 
 The display build is offline and needs only Python and a clang with the ARM
@@ -112,7 +120,8 @@ builder never uploads. See [building](docs/BUILDING.md) and the
 
 See [firmware internals](docs/FIRMWARE.md), [protocol](docs/PROTOCOL.md),
 [recovery](docs/RECOVERY.md),
-[component configuration](components/nspanel_terminal/README.md),
+[terminal component configuration](components/nspanel_terminal/README.md),
+[button keyboard](components/button_keyboard/README.md),
 [examples](examples/README.md), and [contributing](CONTRIBUTING.md). The TFT
 contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see
 [LICENSE](LICENSE).
