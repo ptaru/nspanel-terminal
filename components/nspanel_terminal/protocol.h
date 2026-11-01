@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 #include <array>
@@ -23,7 +24,7 @@ inline void put16(std::vector<uint8_t> &p, unsigned at, unsigned n) {
   p[at] = uint8_t(n);
   p[at + 1] = uint8_t(n >> 8);
 }
-NSPANEL_PROTOCOL_HOT inline uint16_t crc(const uint8_t *p, size_t n) {
+inline uint16_t crc_step(uint16_t c, uint8_t b) {
   static constexpr auto table = []() {
     std::array<uint16_t, 256> t{};
     for (unsigned i = 0; i < 256; i++) {
@@ -33,8 +34,11 @@ NSPANEL_PROTOCOL_HOT inline uint16_t crc(const uint8_t *p, size_t n) {
     }
     return t;
   }();
+  return uint16_t((c << 8) ^ table[(c >> 8) ^ b]);
+}
+NSPANEL_PROTOCOL_HOT inline uint16_t crc(const uint8_t *p, size_t n) {
   uint16_t c = 65535;
-  while (n--) c = uint16_t((c << 8) ^ table[(c >> 8) ^ *p++]);
+  while (n--) c = crc_step(c, *p++);
   return c;
 }
 inline std::vector<uint8_t> cobs(const std::vector<uint8_t> &raw) {
@@ -189,50 +193,51 @@ class Encoder {
     return size != 0;
   }
 };
-/* Reuse both staging buffers rather than allocating header/body/COBS storage
- * for every DATA record. Generic control records keep the small helper above. */
-NSPANEL_PROTOCOL_HOT inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_t> &body, std::vector<uint8_t> &raw,
-                        std::vector<uint8_t> &out, unsigned version = 6) {
-  if (body.size() > PAYLOAD) {
-    raw.clear();
-    out.clear();
-    return;
-  }
-  raw.resize(22 + body.size());
-  std::fill_n(raw.data(), 20, uint8_t(0));
-  raw[0] = 'R';
-  raw[1] = 'S';
-  raw[2] = uint8_t(version);
-  raw[3] = DATA;
-  put16(raw, 4, session);
-  put16(raw, 6, seq);
-  put16(raw, 8, body.size());
-  put16(raw, 18, crc(raw.data(), 18));
-  std::copy(body.begin(), body.end(), raw.data() + 20);
-  const auto c = crc(raw.data(), 20 + body.size());
-  raw[20 + body.size()] = uint8_t(c);
-  raw[21 + body.size()] = uint8_t(c >> 8);
+// Stream header, immutable cached body and trailer into COBS output. CRC is
+// updated before COBS transformation; trailer bytes are excluded from the CRC.
+NSPANEL_PROTOCOL_HOT inline void data_record(unsigned session, unsigned seq, const uint8_t *body,
+                                            size_t body_size, std::vector<uint8_t> &out, unsigned version = 6) {
+  if (body_size > PAYLOAD) { out.clear(); return; }
+  uint8_t header[20] = {'R', 'S', uint8_t(version), DATA};
+  auto put = [&](unsigned at, unsigned value) {
+    header[at] = uint8_t(value);
+    header[at + 1] = uint8_t(value >> 8);
+  };
+  put(4, session); put(6, seq); put(8, body_size);
+  put(18, crc(header, 18));
   out.resize(538);
   uint8_t *dest = out.data();
   size_t size = 1, mark = 0;
   unsigned code = 1;
-  for (uint8_t b : raw) {
-    if (!b) {
+  auto emit = [&](uint8_t byte) {
+    if (!byte) {
       dest[mark] = uint8_t(code);
       mark = size++;
       code = 1;
     } else {
-      dest[size++] = b;
+      dest[size++] = byte;
       if (++code == 255) {
         dest[mark] = 255;
         mark = size++;
         code = 1;
       }
     }
+  };
+  uint16_t checksum = 65535;
+  for (uint8_t byte : header) { checksum = crc_step(checksum, byte); emit(byte); }
+  for (size_t i = 0; i < body_size; ++i) {
+    const uint8_t byte = body[i];
+    checksum = crc_step(checksum, byte);
+    emit(byte);
   }
+  emit(uint8_t(checksum)); emit(uint8_t(checksum >> 8));
   dest[mark] = uint8_t(code);
   dest[size++] = 0;
   out.resize(size);
+}
+inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_t> &body,
+                        std::vector<uint8_t> &out, unsigned version = 6) {
+  data_record(session, seq, body.data(), body.size(), out, version);
 }
 
 constexpr unsigned RESPONSE = 32;

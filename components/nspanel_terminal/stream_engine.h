@@ -127,11 +127,10 @@ class StreamEngine {
             fail("cached data bounds");
             break;
           }
-          body_.assign(cache_ + cache_at_, cache_ + cache_at_ + length);
+          protocol::data_record(session_, seq_++, cache_ + cache_at_, length, tx_, version_);
           cache_at_ += length;
-          protocol::data_record(session_, seq_++, body_, raw_, tx_, version_);
         } else if (!cached_ && encoder_->next(body_)) {
-          protocol::data_record(session_, seq_++, body_, raw_, tx_, version_);
+          protocol::data_record(session_, seq_++, body_, tx_, version_);
         } else {
           stage_ = Stage::END;
           prepare(now);
@@ -320,7 +319,7 @@ class StreamEngine {
   size_t cache_size_ = 0, cache_at_ = 0;
   bool cached_ = false;
   std::optional<protocol::Encoder<Pixels>> encoder_;
-  std::vector<uint8_t> tx_, body_, raw_;
+  std::vector<uint8_t> tx_, body_;
   size_t at_ = 0;
   uint8_t rx_[protocol::RESPONSE]{};
   unsigned have_ = 0;

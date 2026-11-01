@@ -25,7 +25,7 @@ int main() {
         const bool more=fast.next(a);assert(more==ref.next(b));
         assert(a==b && fast.consumed()==ref.consumed());
         if(!more)break;
-        protocol::data_record(7,seq,a,raw,wire,7);
+        protocol::data_record(7,seq,a,wire,7);
         assert(wire==protocol_reference::record(7,seq++,protocol_reference::DATA,0,0,0,0,b,7));
       }
     }
@@ -36,12 +36,12 @@ int main() {
     body.resize(n);
     for(unsigned i=0;i<n;++i) {random=random*1664525u+1013904223u;body[i]=pattern==0?0:pattern==1?255:pattern==2?i:random>>24;}
     for(unsigned version:{6u,7u}) {
-      protocol::data_record(0xffff,n,body,raw,wire,version);
+      protocol::data_record(0xffff,n,body,wire,version);
       assert(wire==protocol_reference::record(0xffff,n,protocol_reference::DATA,0,0,0,0,body,version));
     }
   }
   body.resize(513);
-  protocol::data_record(7,0,body,raw,wire);
-  assert(raw.empty() && wire.empty());
+  protocol::data_record(7,0,body,wire);
+  assert(wire.empty());
   puts("encoding: reference-identical payloads, framing, tails and COBS boundaries passed");
 }
