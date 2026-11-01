@@ -37,7 +37,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/ptaru/nspanel-terminal
-      ref: main
+      ref: v0.7.1
     components: [button_keyboard]
 ```
 
@@ -65,7 +65,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/ptaru/nspanel-terminal
-      ref: main
+      ref: v0.7.1
     components: [button_keyboard]
 
 lvgl:

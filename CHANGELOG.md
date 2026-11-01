@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.1 — 2026-11-01
 
 - Add `button_keyboard`, an LVGL text-entry keyboard built from individual
   buttons so a press invalidates one key instead of the whole keyboard. It

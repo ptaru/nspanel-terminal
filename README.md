@@ -1,6 +1,6 @@
 # NSPanel terminal
 
-Release 0.7.0.
+Release 0.7.1.
 
 
 Turn an EU or US Sonoff NSPanel into a general-purpose ESPHome display and
@@ -37,9 +37,10 @@ builds both images from the original Sonoff images. See
 [display firmware internals](docs/FIRMWARE.md) for the implementation and
 [building](docs/BUILDING.md) for the toolchain and commands.
 
-Version 0.7.0 replaces the full-frame mirror with flush-area streaming and
-moves the frame slots into internal RAM. The TFTs are unchanged from 0.6.0;
-existing 0.6.0 installations only need an ESP32 firmware update.
+Version 0.7.1 adds the standalone button keyboard and includes the post-0.7.0
+transport fixes and `frame_slots_ram`. The display path remains the 0.7.0
+flush-area streaming design. The TFTs are unchanged from 0.7.0; existing 0.7.0
+installations only need an ESP32 firmware update.
 
 ## Install
 
@@ -54,12 +55,12 @@ existing 0.6.0 installations only need an ESP32 firmware update.
    python3 tools/verify_tft.py --panel us firmware/terminal-us.tft
    ```
 
-4. Flash `examples/panel.yaml` for the EU panel or `examples/panel-us.yaml` for the US panel — USB serial for the first installation, or OTA if the current firmware is reachable. Both load the component from the `v0.7.0` tag on GitHub and expose `upload_tft`, so no local checkout is needed.
+4. Flash `examples/panel.yaml` for the EU panel or `examples/panel-us.yaml` for the US panel — USB serial for the first installation, or OTA if the current firmware is reachable. Both load the component from the `v0.7.1` tag on GitHub and expose `upload_tft`, so no local checkout is needed.
 5. Call `upload_tft`. The component stops the terminal, installs the TFT from `tft_url`, and restarts the display. Wait for completion, then verify that the ESPHome UI renders and touch works.
 
 The sample configurations use the NSPanel GPIO pins and PSRAM wiring. Review them
 before installing, especially if your board differs. Keep the component and the
-TFT from the same release (`v0.7.0`; use the `main` branch for development) and
+TFT from the same release (`v0.7.1`; use the `main` branch for development) and
 select the matching panel geometry:
 
 ```yaml
