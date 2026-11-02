@@ -7,6 +7,7 @@
 #include <atomic>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 #include "esphome/components/display/display_buffer.h"
 #include "esphome/components/uart/uart.h"
@@ -36,6 +37,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     cancel_render_benchmark_("exit requested");
     exit_requested_ = true;
     stream_.request_exit();
+    wake_transport_();
   }
   void request_enter();
   void request_tft_upload();
@@ -129,6 +131,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     uint8_t *cache = nullptr;
     size_t size = 0;
     uint16_t x = 0, y = 0, w = 0, h = 0;
+    uint32_t queued_us = 0, freed_us = 0;
   };
   std::array<FrameJob, JOB_SLOTS> jobs_{};
   uint8_t *job_storage_ = nullptr;
@@ -152,6 +155,20 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   bool identity_ok_(const char *reply) const;
   void fail_(const char *);
   void finish_recovery_();
+  void wake_transport_() { if (work_signal_ != nullptr) xSemaphoreGive(work_signal_); }
+  void signal_slot_() { if (slot_signal_ != nullptr) xSemaphoreGive(slot_signal_); }
+  StaticSemaphore_t work_signal_storage_{};
+  SemaphoreHandle_t work_signal_ = nullptr;
+  StaticSemaphore_t slot_signal_storage_{};
+  SemaphoreHandle_t slot_signal_ = nullptr;
+  struct SchedulingStats {
+    uint32_t waits[5]{};
+    uint32_t forced_yields = 0, max_hold_us = 0;
+    uint32_t queued_count = 0, queued_max_us = 0;
+    uint64_t queued_us = 0;
+    uint32_t slot_count = 0, slot_max_us = 0;
+    uint64_t slot_us = 0;
+  } schedule_;
   void service_stream_(int incoming = -1);
   bool init_frame_jobs_();
   FrameJob *acquire_job_(std::unique_lock<std::recursive_mutex> &lock);

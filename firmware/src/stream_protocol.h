@@ -5,8 +5,8 @@
 #include "panel_profile.h"
 
 /*
- * Protocol 7 receiver: COBS-delimited records, a 20-byte header, a body of at
- * most 512 bytes and a uint16 trailer CRC. The receiver validates the header
+ * Protocol 8 receiver: COBS-delimited records, a 20-byte header, a body of at
+ * most 512 bytes and no body/trailer CRC. The receiver validates the header
  * and sequence before any body can reach the LCD, then streams a PackBits
  * RGB565 body directly to the panel. See docs/PROTOCOL.md for the wire format.
  *
@@ -14,9 +14,9 @@
  *   STREAM_WINDOW(x, y, w, h)  set the LCD window before a rectangle
  *   STREAM_BYTE(b)             write one pixel byte (RGB565, high byte first)
  *
- * Protocol 7 headers (little endian):
+ * Protocol 8 headers (little endian):
  *   0..1   'R' 'S'
- *   2      protocol version, 7
+ *   2      protocol version, 8
  *   3      kind: RECT=1, DATA=2, END=3, PING=4, EXIT=5, SYNC=6, BRIGHTNESS=7
  *   4..5   session
  *   6..7   sequence modulo 65536
@@ -24,9 +24,9 @@
  *   10..17 geometry: x, y, width, height (uint16 each); END.x=1 closes a burst
  *   18..19 header CRC16-CCITT over bytes 0..17, initial 0xffff
  *
- * The body is followed by a CRC16-CCITT over the header and body, initial
- * 0xffff. The trailer is checked after streaming, so a damaged DATA record can
- * already have written pixels; recovery requires a SYNC and a full redraw.
+ * Only the header is checksummed. Structurally valid body corruption is
+ * undetectable and can persist until repaint. Malformed bodies fault and
+ * require SYNC and a redraw. Reverse reports retain their CRC.
  */
 
 /* A hardware build can provide a register-only repeated-pixel writer. A
@@ -122,7 +122,7 @@ static unsigned stream_header_ok(StreamPackBits *s) {
   unsigned k = p[3], n = stream_u16(p + 8);
   unsigned x = stream_u16(p + 10), y = stream_u16(p + 12);
   unsigned w = stream_u16(p + 14), h = stream_u16(p + 16);
-  if (p[0] != 'R' || p[1] != 'S' || p[2] != 7 || stream_u16(p + 4) != s->session ||
+  if (p[0] != 'R' || p[1] != 'S' || p[2] != 8 || stream_u16(p + 4) != s->session ||
       n > STREAM_PAYLOAD)
     return 0;
   if (k != STREAM_SYNC && (s->fault || stream_u16(p + 6) != s->seq)) return 0;
@@ -153,7 +153,6 @@ static __attribute__((always_inline)) inline void stream_decoded(
       if (s->trailer != stream_u16(s->head + 18) || !stream_header_ok(s)) s->bad = 1;
     }
   } else if (pos < STREAM_HEADER + s->length) {
-    s->crc = stream_crc(s->crc, b);
     if (!s->bad && s->head[3] == STREAM_DATA) {
       /* PackBits token: high bit = repeat, low seven bits = run length - 1.
        * A repeat token is followed by one RGB565 pixel; a literal token by
@@ -180,10 +179,6 @@ static __attribute__((always_inline)) inline void stream_decoded(
         s->half = 0;
       }
     }
-  } else if (pos == STREAM_HEADER + s->length) {
-    s->trailer = b;
-  } else if (pos == STREAM_HEADER + s->length + 1) {
-    s->trailer |= (uint16_t)b << 8;
   } else {
     s->bad = 1;
   }
@@ -202,7 +197,7 @@ static __attribute__((always_inline)) inline void stream_decoded(
  */
 static unsigned stream_feed(StreamPackBits *s, uint8_t b) {
   if (b) {
-    if (s->encoded >= 537) {
+    if (s->encoded >= 535) {
       s->bad = 1;
       return 0;
     }
@@ -220,7 +215,7 @@ static unsigned stream_feed(StreamPackBits *s, uint8_t b) {
   if (!s->encoded) return 0;
   unsigned event = 0;
   if (s->bad || s->run || s->half || s->code_left ||
-      s->pos != STREAM_HEADER + s->length + 2 || s->crc != s->trailer) {
+      s->pos != STREAM_HEADER + s->length) {
     if (!s->fault) event = STREAM_ERROR;
     s->fault = 1;
     s->active = 0;
@@ -249,5 +244,58 @@ static unsigned stream_feed(StreamPackBits *s, uint8_t b) {
     }
   }
   stream_reset_frame(s);
+  return event;
+}
+
+/* Consume a contiguous DMA span, stopping at a report-producing delimiter.
+ * The caller bounds service work and splits at ring wrap. Header/code/implicit
+ * zero handling shares the byte path; nonzero DATA blocks use local PackBits
+ * state, with no per-byte COBS or CRC bookkeeping. */
+static unsigned stream_feed_span(StreamPackBits *s, const volatile uint8_t *p,
+                                 unsigned size, unsigned *used) {
+  unsigned at = 0, event = 0;
+  while (at < size && !event) {
+    if (!s->bad && s->pos >= STREAM_HEADER && s->head[3] == STREAM_DATA && s->pos < STREAM_HEADER + s->length &&
+        s->code_left && s->encoded < 535 && p[at]) {
+      unsigned n = size - at;
+      if (n > s->code_left) n = s->code_left;
+      if (n > STREAM_HEADER + s->length - s->pos)
+        n = STREAM_HEADER + s->length - s->pos;
+      if (n > 535u - s->encoded) n = 535u - s->encoded;
+      unsigned run = s->run, half = s->half, hi = s->hi;
+      unsigned repeat = s->repeat, remaining = s->remaining, i = 0;
+      for (; i < n; ++i) {
+        unsigned b = p[at + i];
+        if (!b) break; /* A premature delimiter must reach structural checks. */
+        if (!run) {
+          run = (b & 127) + 1;
+          repeat = b >> 7;
+          if (2u * run > remaining) { s->bad = 1; ++i; break; }
+        } else if (!half) {
+          hi = b;
+          half = 1;
+        } else {
+          if (repeat) {
+            STREAM_REPEAT(hi, b, run);
+            remaining -= 2u * run;
+            run = 0;
+          } else {
+            STREAM_BYTE(hi);
+            STREAM_BYTE(b);
+            remaining -= 2;
+            --run;
+          }
+          half = 0;
+        }
+      }
+      s->run = run; s->half = half; s->hi = hi;
+      s->repeat = repeat; s->remaining = remaining;
+      s->pos += i; s->encoded += i; s->code_left -= i;
+      at += i;
+      if (i) continue;
+    }
+    event = stream_feed(s, p[at++]);
+  }
+  *used = at;
   return event;
 }

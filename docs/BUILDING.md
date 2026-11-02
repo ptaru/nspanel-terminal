@@ -12,13 +12,13 @@ device.
 
 | Profile | Panel | Visible area | Base native | Native patches | Shipped native | Base | Shipped |
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
-| `eu` | EU landscape | 454×320 in a 480×320 controller | 72 | 7 | 93 | `firmware/base-eu.tft` | `firmware/terminal-eu.tft` |
-| `us` | US portrait | 320×480 | 72 | 0 | 93 | `firmware/base-us.tft` | `firmware/terminal-us.tft` |
+| `eu` | EU landscape | 454×320 in a 480×320 controller | 72 | 7 | 94 | `firmware/base-eu.tft` | `firmware/terminal-eu.tft` |
+| `us` | US portrait | 320×480 | 72 | 0 | 94 | `firmware/base-us.tft` | `firmware/terminal-us.tft` |
 
 Both bases are unmodified 72 blank exports (the EU Editor export and the stock
 US export). The EU profile applies the
 EU native patches (state, dim and baud handling); the US profile has no
-native code patches. Both profiles set the native version metadata to 93 and
+native code patches. Both profiles set the native version metadata to 94 and
 repair its two CRCs. The two bases share the same container offsets, native
 bundle location and helper-0 slot, but each profile is tied to its own base
 SHA-256.
@@ -73,7 +73,7 @@ Expected EU output:
 ```text
 wrote .../build/terminal-eu.tft
   panel   : eu (454x320)
-  SHA-256 : 925b0f35109e72354816a96d9af0b07cc9f92beaf1aed3ba576a2424b3c0ae3c
+  SHA-256 : 1a8cd088aba9bb0f142876d0be61ddebc183809e83affc40e84bd85dcef92df3
   program : 3276 / 3568 bytes
   loader  : 292 / 844 bytes
   changed : 4154 bytes
@@ -85,7 +85,7 @@ Expected US output:
 ```text
 wrote .../build/terminal-us.tft
   panel   : us (320x480)
-  SHA-256 : 20ba711b65e58febac29f758ea2724a2f71b9202c028a4e45abef64ca404e73c
+  SHA-256 : 98b2a5f6478fa438b3d6e21acb9883e1d30efd7d1a85ae8f0cc0390c2a441c3d
   program : 3276 / 3568 bytes
   loader  : 288 / 844 bytes
   changed : 4127 bytes

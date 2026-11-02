@@ -1,4 +1,4 @@
-// Frozen protocol implementation from public commit 9400d12, for byte compatibility tests.
+// PackBits/COBS reference from public commit 9400d12; framing adapted to protocol 8.
 #pragma once
 #include <algorithm>
 #include <array>
@@ -57,13 +57,12 @@ inline std::vector<uint8_t> cobs(const std::vector<uint8_t> &raw) {
   return out;
 }
 inline std::vector<uint8_t> record(unsigned session, unsigned seq, unsigned kind, unsigned x = 0, unsigned y = 0,
-                                   unsigned w = 0, unsigned h = 0, const std::vector<uint8_t> &body = {},
-                                   unsigned version = 6) {
+                                   unsigned w = 0, unsigned h = 0, const std::vector<uint8_t> &body = {}) {
   if (body.size() > PAYLOAD) return {};
   std::vector<uint8_t> b(20);
   b[0] = 'R';
   b[1] = 'S';
-  b[2] = uint8_t(version);
+  b[2] = 8;
   b[3] = uint8_t(kind);
   put16(b, 4, session);
   put16(b, 6, seq);
@@ -74,9 +73,6 @@ inline std::vector<uint8_t> record(unsigned session, unsigned seq, unsigned kind
   put16(b, 16, h);
   put16(b, 18, crc(b.data(), 18));
   b.insert(b.end(), body.begin(), body.end());
-  auto c = crc(b.data(), b.size());
-  b.push_back(uint8_t(c));
-  b.push_back(uint8_t(c >> 8));
   return cobs(b);
 }
 /* A sequential source is read exactly once per pixel. Two-pixel lookahead

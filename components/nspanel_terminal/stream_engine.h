@@ -10,6 +10,7 @@ namespace esphome::nspanel_terminal {
 class StreamEngine {
  public:
   enum class Stage { READY, IDLE, RECT, DATA, END, BETWEEN, DONE, SYNC, SYNCED, BRIGHTNESS_ACK, EXIT, BYE, STOPPED, FAILED };
+  enum class Wait { RUNNABLE, RX, PRODUCER, TX_SPACE, INACTIVE };
   struct Pixels {
     const uint8_t *data;
     uint16_t operator()(unsigned i) const { return protocol::get16(data + 2 * i); }
@@ -62,7 +63,7 @@ class StreamEngine {
     if (!can_submit() || !snapshot || !w || !h || x >= width_ || y >= height_ || w > width_ - x ||
         h > height_ - y)
       return false;
-    final_ = version_ == 6 || final;
+    final_ = final;
     ++burst_rects_;
     x_ = x;
     y_ = y;
@@ -101,16 +102,16 @@ class StreamEngine {
           last_report_ = now;
           prepare(now);
         } else if (brightness_pending_) {
-          tx_ = protocol::record(session_, seq_++, protocol::BRIGHTNESS, brightness_percent_, 0, 0, 0, {}, version_);
+          tx_ = protocol::record(session_, seq_++, protocol::BRIGHTNESS, brightness_percent_, 0, 0, 0, {});
           brightness_pending_ = false;
           stage_ = Stage::BRIGHTNESS_ACK;
         } else if (uint32_t(now - last_wire_) >= 80) {
-          tx_ = protocol::record(session_, seq_++, protocol::PING, 0, 0, 0, 0, {}, version_);
+          tx_ = protocol::record(session_, seq_++, protocol::PING, 0, 0, 0, 0, {});
           ++heartbeats_;
         }
         break;
       case Stage::RECT:
-        tx_ = protocol::record(session_, seq_++, protocol::RECT, x_, y_, w_, h_, {}, version_);
+        tx_ = protocol::record(session_, seq_++, protocol::RECT, x_, y_, w_, h_, {});
         if (cached_) cache_at_ = 0;
         else encoder_.emplace(w_ * h_, Pixels{snapshot_});
         stage_ = Stage::DATA;
@@ -127,10 +128,10 @@ class StreamEngine {
             fail("cached data bounds");
             break;
           }
-          protocol::data_record(session_, seq_++, cache_ + cache_at_, length, tx_, version_);
+          protocol::data_record(session_, seq_++, cache_ + cache_at_, length, tx_);
           cache_at_ += length;
         } else if (!cached_ && encoder_->next(body_)) {
-          protocol::data_record(session_, seq_++, body_, tx_, version_);
+          protocol::data_record(session_, seq_++, body_, tx_);
         } else {
           stage_ = Stage::END;
           prepare(now);
@@ -138,20 +139,42 @@ class StreamEngine {
         break;
       case Stage::END:
         tx_ = protocol::record(session_, seq_++, protocol::END,
-                               version_ == 7 && final_ ? 1 : 0, 0, 0, 0, {}, version_);
+                               final_ ? 1 : 0, 0, 0, 0, {});
         stage_ = final_ ? Stage::DONE : Stage::BETWEEN;
         break;
       case Stage::SYNC:
-        tx_ = protocol::record(session_, seq_++, protocol::SYNC, 0, 0, 0, 0, {}, version_);
+        tx_ = protocol::record(session_, seq_++, protocol::SYNC, 0, 0, 0, 0, {});
         tx_.insert(tx_.begin(), 0);
         stage_ = Stage::SYNCED;
         break;
       case Stage::EXIT:
-        tx_ = protocol::record(session_, seq_++, protocol::EXIT, 0, 0, 0, 0, {}, version_);
+        tx_ = protocol::record(session_, seq_++, protocol::EXIT, 0, 0, 0, 0, {});
         stage_ = Stage::BYE;
         break;
       default:
         break;
+    }
+  }
+  // Call under the owner's mutex after servicing RX/TX. Preparing a record
+  // is work even before pending() becomes true; an empty idle queue is not.
+  Wait next_work(uint32_t now, bool queued_job, size_t tx_space) const {
+    if (failed() || stage_ == Stage::STOPPED) return Wait::INACTIVE;
+    if (pending()) {
+      if (!allowance()) return Wait::RX;
+      return tx_space ? Wait::RUNNABLE : Wait::TX_SPACE;
+    }
+    switch (stage_) {
+      case Stage::RECT: case Stage::DATA: case Stage::END:
+      case Stage::SYNC: case Stage::EXIT:
+        return Wait::RUNNABLE;
+      case Stage::IDLE:
+        if (exit_ || brightness_pending_ || uint32_t(now - last_wire_) >= 80)
+          return Wait::RUNNABLE;
+        [[fallthrough]];
+      case Stage::BETWEEN:
+        return queued_job ? Wait::RUNNABLE : Wait::PRODUCER;
+      default:
+        return Wait::RX; // READY, DONE, SYNCED, BYE, BRIGHTNESS_ACK
     }
   }
   size_t allowance() const {
@@ -197,10 +220,6 @@ class StreamEngine {
     }
     have_ = 0;
     reverse_misses_ = 0;
-    if (stage_ != Stage::READY && r.version != version_) {
-      fail("reverse version changed");
-      return false;
-    }
     if (uint32_t(r.consumed - consumed_) > uint32_t(sent_ - consumed_)) {
       fail("credit ahead");
       return false;
@@ -223,7 +242,6 @@ class StreamEngine {
         return true;
       }
       stage_ = Stage::IDLE;
-      version_ = r.version;
       live_brightness_ = r.status == protocol::READY_BRIGHTNESS;
     } else if (r.status == protocol::ERROR) {
       if (burst_rects_ > 1 || !final_) {
@@ -231,7 +249,7 @@ class StreamEngine {
         return true;
       }
       if (++retries_ > 2) {
-        fail("receiver CRC fault");
+        fail("receiver protocol fault");
         return true;
       }
       tx_.clear();
@@ -293,7 +311,7 @@ class StreamEngine {
     return burst_rects_ > 1 || !final_;
   }
   unsigned burst_rectangles() const { return burst_rects_; }
-  unsigned version() const { return version_; }
+  unsigned version() const { return protocol::VERSION; }
   bool failed() const { return stage_ == Stage::FAILED; }
   bool idle() const { return stage_ == Stage::IDLE && !pending(); }
   Stage stage() const { return stage_; }
@@ -308,7 +326,7 @@ class StreamEngine {
  private:
   Stage stage_ = Stage::STOPPED;
   unsigned session_ = 0, seq_ = 0, x_ = 0, y_ = 0, w_ = 0, h_ = 0, retries_ = 0, mask_ = 0, heartbeats_ = 0;
-  unsigned width_ = 454, height_ = 320, version_ = 6, burst_rects_ = 0;
+  unsigned width_ = 454, height_ = 320, burst_rects_ = 0;
   uint16_t completed_ = 0;
   uint32_t sent_ = 0, consumed_ = 0, last_wire_ = 0, last_report_ = 0;
   bool exit_ = false, final_ = true;

@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 /*
- * NSPanel protocol-7 terminal receiver with burst completion and live brightness.
+ * NSPanel protocol-8 terminal receiver with burst completion and live brightness.
  *
  * This is the RAM overlay that runs while the stock Nextion UI is suspended.
  * It is copied by terminal_loader.c to 0x20000900 and entered at
@@ -8,7 +8,7 @@
  * project RAM, then restores them before returning.
  *
  * Responsibilities:
- *   - receive COBS-framed protocol-6 records at 2 or 4 Mbaud;
+ *   - receive COBS-framed protocol-8 records at 2 or 4 Mbaud;
  *   - draw PackBits RGB565 rectangles through the stock window/GPIO path;
  *   - poll the Goodix touch controller and publish contacts;
  *   - apply checked live-brightness records between rectangles;
@@ -82,7 +82,7 @@ static unsigned report(const StreamPackBits *s, unsigned status,
   uint16_t f[16];
   uint8_t *p = (uint8_t *)f;
   f[0] = 0x5253; /* 'S' 'R' */
-  p[2] = 7;
+  p[2] = 8;
   p[3] = status;
   f[2] = s->session;
   f[3] = s->seq;
@@ -193,11 +193,15 @@ uint32_t pool_entry(void) {
     /* Revisit touch and DMA status after at most 32 encoded bytes, even when
      * repeated pixels expand to substantially more LCD work. */
     if (count > 32) count = 32;
-    while (count--) {
-      uint8_t b =
-          *(volatile uint8_t *)(0x200004f0 + (consumed & (STREAM_RING - 1)));
-      unsigned event = stream_feed(&s, b);
-      ++consumed;
+    unsigned contiguous = STREAM_RING - (consumed & (STREAM_RING - 1));
+    if (count > contiguous) count = contiguous;
+    while (count) {
+      unsigned used;
+      unsigned event = stream_feed_span(&s,
+          (const volatile uint8_t *)(0x200004f0 + (consumed & (STREAM_RING - 1))),
+          count, &used);
+      consumed += used;
+      count -= used;
       if (event || consumed - published >= 256) {
         if (event == STREAM_BYE) poll(work, &touch);
         ok = report(&s, event ? event : STREAM_PROGRESS, consumed, 0, high,

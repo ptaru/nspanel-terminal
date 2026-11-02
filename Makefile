@@ -40,3 +40,5 @@ test:
 	./build/check-frame-slot
 	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_repeat_scan.cpp -o build/check-repeat-scan
 	./build/check-repeat-scan
+	$(CXX) -std=c++17 -Wall -Wextra -Werror -fsanitize=address,undefined tests/check_scheduling.cpp -o build/check-scheduling
+	./build/check-scheduling

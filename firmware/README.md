@@ -1,15 +1,15 @@
 # Display firmware
 
 
-These are blank NSPanel protocol-7 TFTs with live brightness and a fixed
+These are blank NSPanel protocol-8 TFTs with live brightness and a fixed
 3-second host-inactivity watchdog. The EU image uses the 454×320 landscape
 framebuffer; the US image is a port to the 320×480 portrait panel.
 
 | File | Panel | Role | SHA-256 |
 | --- | --- | --- | --- |
-| `terminal-eu.tft` | EU | Shipped, hardware-tested image. Install this on the EU panel. | `925b0f35109e72354816a96d9af0b07cc9f92beaf1aed3ba576a2424b3c0ae3c` |
+| `terminal-eu.tft` | EU | Development candidate; EU upload/redraw smoke-tested. | `1a8cd088aba9bb0f142876d0be61ddebc183809e83affc40e84bd85dcef92df3` |
 | `base-eu.tft` | EU | Unmodified blank Editor export (native 72) used only as the build input. | `6314294af0822bfe1616d2f28ba4e81b15038a20b53abedd0f9aafacb64994ef` |
-| `terminal-us.tft` | US | Ported, offline-validated image; reports native 93. Not yet hardware-tested. | `20ba711b65e58febac29f758ea2724a2f71b9202c028a4e45abef64ca404e73c` |
+| `terminal-us.tft` | US | Ported, offline-validated image; reports native 94. Not yet hardware-tested. | `98b2a5f6478fa438b3d6e21acb9883e1d30efd7d1a85ae8f0cc0390c2a441c3d` |
 | `base-us.tft` | US | Stock US TFT (native 72) used only as the build input. | `f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c` |
 | `src/` | both | Native C source and source map. | — |
 
@@ -17,7 +17,7 @@ The EU pair is 264,936 bytes; the US pair is 264,984 bytes. Both bases are
 unmodified 72 blank exports: the EU blank Editor export and the stock US
 export. Each shipped image replaces its base's
 terminal preamble and helper 0 with the live-brightness receiver and loader,
-repairs the affected checksums, and reports native revision 93. The EU builder
+repairs the affected checksums, and reports native revision 94. The EU builder
 also applies EU native patches (state, dim and baud handling) and
 updates the version metadata. The base is **not** the shipped image; use it only
 to reproduce or modify the build.

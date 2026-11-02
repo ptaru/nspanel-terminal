@@ -37,7 +37,7 @@ void NSPanelTouchscreen::update_touches() {
 }
 
 void NSPanelTouchscreen::dump_config() {
-  ESP_LOGCONFIG("nspanel_terminal", "NSPanel protocol6 touchscreen, single pointer");
+  ESP_LOGCONFIG("nspanel_terminal", "NSPanel protocol8 touchscreen, single pointer");
 }
 
 }  // namespace esphome::nspanel_terminal

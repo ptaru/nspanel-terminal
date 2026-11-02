@@ -22,7 +22,11 @@ namespace esphome::nspanel_terminal {
 static const char *const TAG = "nspanel_terminal";
 NSPanelDisplay::~NSPanelDisplay() {
   task_stop_ = true;
+  wake_transport_();
+  signal_slot_();
   while (task_running_) vTaskDelay(1);
+  if (work_signal_) { vSemaphoreDelete(work_signal_); work_signal_ = nullptr; }
+  if (slot_signal_) { vSemaphoreDelete(slot_signal_); slot_signal_ = nullptr; }
   // The upload task owns the UART while it runs; do not free the slot storage
   // underneath it.
   while (upload_running_) vTaskDelay(1);
@@ -68,15 +72,28 @@ NSPanelDisplay::FrameJob *NSPanelDisplay::acquire_job_(std::unique_lock<std::rec
   // whole reverse timeout. Feed the task watchdog while yielding to the
   // transport task.
   const uint32_t started = millis();
-  while (job_storage_ && state_ == State::STREAM) {
+  bool waited = false;
+  while (job_storage_ && state_ == State::STREAM && !task_stop_) {
     for (auto &job : jobs_)
       if (job.reserve()) {
+        if (waited && job.freed_us) {
+          const uint32_t lag = micros() - job.freed_us;
+          ++schedule_.slot_count;
+          schedule_.slot_us += lag;
+          schedule_.slot_max_us = std::max(schedule_.slot_max_us, lag);
+        }
+        job.freed_us = 0;
         return &job;
       }
-    if (millis() - started >= 250) return nullptr;
+    const uint32_t elapsed = millis() - started;
+    if (elapsed >= 250) return nullptr;
+    const uint32_t remaining = 250 - elapsed;
+    waited = true;
     lock.unlock();
     App.feed_wdt();
-    vTaskDelay(pdMS_TO_TICKS(1));
+    // Latched signal covers a release between the scan and the wait. The
+    // short timeout also feeds the watchdog and preserves the overall limit.
+    xSemaphoreTake(slot_signal_, pdMS_TO_TICKS(std::min<uint32_t>(remaining, 10)));
     lock.lock();
   }
   return nullptr;
@@ -89,25 +106,35 @@ void NSPanelDisplay::drop_frame_(const char *reason) {
 }
 void NSPanelDisplay::enqueue_job_(FrameJob *job) {
   job->state = 2;
+  job->queued_us = micros();
   job_queue_[job_head_] = unsigned(job - jobs_.data());
   job_head_ = (job_head_ + 1) % JOB_SLOTS;
   ++job_queued_;
+  wake_transport_();
 }
 NSPanelDisplay::FrameJob *NSPanelDisplay::dequeue_job_() {
   if (!job_queued_) return nullptr;
   FrameJob *job = &jobs_[job_queue_[job_tail_]];
   job_tail_ = (job_tail_ + 1) % JOB_SLOTS;
   --job_queued_;
+  const uint32_t lag = micros() - job->queued_us;
+  ++schedule_.queued_count;
+  schedule_.queued_us += lag;
+  schedule_.queued_max_us = std::max(schedule_.queued_max_us, lag);
   return job;
 }
 void NSPanelDisplay::release_active_job_() {
   if (!active_job_) return;
   active_job_->state = 0;
+  active_job_->freed_us = micros();
   active_job_ = nullptr;
+  signal_slot_();
 }
 void NSPanelDisplay::clear_jobs_() {
   ++job_generation_;
-  for (auto &job : jobs_) job.cancel();
+  for (auto &job : jobs_) { job.cancel(); job.freed_us = 0; }
+  signal_slot_();
+  wake_transport_();
   job_head_ = job_tail_ = job_queued_ = 0;
   active_job_ = nullptr;
 }
@@ -127,6 +154,8 @@ void NSPanelDisplay::setup() {
   repaint_pending_ = true;
   deadline_ = millis() + 2000;
   task_stop_ = false;
+  slot_signal_ = xSemaphoreCreateBinaryStatic(&slot_signal_storage_);
+  work_signal_ = xSemaphoreCreateBinaryStatic(&work_signal_storage_);
   if (xTaskCreatePinnedToCore(task_entry_, "nspanel_uart", 6144, this, 2, &task_, 0) != pdPASS) {
     ESP_LOGE(TAG, "Transport task creation failed");
     mark_failed();
@@ -142,24 +171,64 @@ void NSPanelDisplay::task_entry_(void *arg) {
 }
 void NSPanelDisplay::task_loop_() {
   int incoming = -1;
+  uint32_t runnable_started = 0;
+  using Wait = StreamEngine::Wait;
   while (!task_stop_) {
-    bool streaming;
+    Wait wait = Wait::INACTIVE;
     {
       std::lock_guard<std::recursive_mutex> lock(mutex_);
-      streaming = state_ == State::STREAM;
-      if (streaming && !abandon_requested_) service_stream_(incoming);
+      const uint32_t held = micros();
+      if (state_ == State::STREAM && !abandon_requested_) {
+        service_stream_(incoming);
+        if (state_ == State::STREAM && !stream_.failed()) {
+          const bool queued = !benchmark_active_ && !exit_requested_ && !job_queue_empty_();
+          wait = stream_.next_work(millis(), queued, parent_->available_for_write());
+          // service_stream_ deliberately suppresses idle heartbeats while a
+          // measured LVGL refresh has not produced any flush areas yet.
+          if (render_wait_refresh_ && !active_job_ && job_queue_empty_() && stream_.idle())
+            wait = Wait::PRODUCER;
+          // Raw diagnostic workloads generate their next frame at entry.
+          if (benchmark_active_ && stream_.idle()) wait = Wait::RUNNABLE;
+        }
+      } else if (state_ == State::STREAM) {
+        // A deliberate watchdog trial suppresses TX but must keep draining
+        // incoming UART bytes, matching the original abandoned-stream loop.
+        wait = Wait::RX;
+      }
       incoming = -1;
+      ++schedule_.waits[unsigned(wait)];
+      schedule_.max_hold_us = std::max(schedule_.max_hold_us, uint32_t(micros() - held));
     }
-    if (streaming) {
+    if (task_stop_) break;
+    if (wait == Wait::RUNNABLE) {
+      const uint32_t now = micros();
+      if (!runnable_started) runnable_started = now;
+      if (uint32_t(now - runnable_started) >= 4000) {
+        { std::lock_guard<std::recursive_mutex> lock(mutex_); ++schedule_.forced_yields; }
+        vTaskDelay(pdMS_TO_TICKS(1));
+        runnable_started = 0;
+      }
+      // The mutex is released between bounded service passes. RX is drained
+      // again before any further writes; never wait for RX with runnable TX.
+      continue;
+    }
+    runnable_started = 0;
+    if (wait == Wait::RX || wait == Wait::TX_SPACE) {
       auto *idf = idf_uart_();
       uint8_t b;
       if (uart_read_bytes(uart_port_t(idf->get_hw_serial_number()), &b, 1, pdMS_TO_TICKS(1)) == 1)
         incoming = b;
-    } else vTaskDelay(pdMS_TO_TICKS(10));
+    } else if (wait == Wait::PRODUCER) {
+      // Work publications are latched even if they precede this wait. A one
+      // tick fallback bounds touch/report latency while no producer is ready.
+      xSemaphoreTake(work_signal_, pdMS_TO_TICKS(1));
+    } else {
+      xSemaphoreTake(work_signal_, pdMS_TO_TICKS(10));
+    }
   }
 }
 void NSPanelDisplay::dump_config() {
-  ESP_LOGCONFIG(TAG, "NSPanel protocol6/7 LVGL flush display, %ux%u RGB565, UART 4 Mbaud", unsigned(width_),
+  ESP_LOGCONFIG(TAG, "NSPanel protocol8 LVGL flush display, %ux%u RGB565, UART 4 Mbaud", unsigned(width_),
                 unsigned(height_));
   LOG_UPDATE_INTERVAL(this);
 }
@@ -235,6 +304,15 @@ void NSPanelDisplay::report_memory() {
                   "reverse shifts=%u",
              unsigned(uxTaskGetStackHighWaterMark(task_)), dropped_frames_, dropped_touches_, stream_.touch_faults(),
              stream_.reverse_shifts());
+  ESP_LOGI(TAG, "Scheduling: run=%u rx=%u producer=%u tx_space=%u inactive=%u yields=%u max_hold=%u us",
+      unsigned(schedule_.waits[0]), unsigned(schedule_.waits[1]), unsigned(schedule_.waits[2]),
+      unsigned(schedule_.waits[3]), unsigned(schedule_.waits[4]), unsigned(schedule_.forced_yields),
+      unsigned(schedule_.max_hold_us));
+  ESP_LOGI(TAG, "Scheduling latency: queued=%u avg=%u max=%u slot_wakes=%u avg=%u max=%u us",
+      unsigned(schedule_.queued_count), unsigned(schedule_.queued_count ? schedule_.queued_us / schedule_.queued_count : 0),
+      unsigned(schedule_.queued_max_us), unsigned(schedule_.slot_count),
+      unsigned(schedule_.slot_count ? schedule_.slot_us / schedule_.slot_count : 0), unsigned(schedule_.slot_max_us));
+
 }
 void NSPanelDisplay::start_render_benchmark(unsigned repeats) {
   std::lock_guard<std::recursive_mutex> lock(mutex_);
@@ -639,7 +717,7 @@ bool NSPanelDisplay::change_baud_(uint32_t baud) {
 bool NSPanelDisplay::identity_ok_(const char *reply) const {
   // The stock connect reply starts with the model, native version and MCU code:
   // NX4832F035_011C,<native>,61744,... . Our EU and US images both report
-  // native revision 92 (protocol 6) or 93 (protocol 7); stock images report 72. Panel geometry is checked
+  // native revision 94 (protocol 8). Panel geometry is checked
   // separately by the loader through the stock entry dimensions and state.
   static constexpr char MODEL[] = "NX4832F035_011C,";
   const char *field = std::strstr(reply, MODEL);
@@ -651,7 +729,7 @@ bool NSPanelDisplay::identity_ok_(const char *reply) const {
   char *record_end = nullptr;
   const unsigned long record = std::strtoul(end + 1, &record_end, 10);
   if (record_end == end + 1 || *record_end != ',') return false;
-  return (version == 92 || version == 93) && record == 61744;
+  return version == 94 && record == 61744;
 }
 void NSPanelDisplay::service_stream_(int incoming) {
   uint32_t started = micros();
@@ -680,8 +758,7 @@ void NSPanelDisplay::service_stream_(int incoming) {
       benchmark_highwater_ = std::max(benchmark_highwater_, r.highwater);
     }
     if (r.status == protocol::READY || r.status == protocol::READY_BRIGHTNESS)
-      ESP_LOGI(TAG, "Protocol %u selected (%s)", stream_.version(),
-               stream_.version() == 7 ? "burst, content aware" : "per-rectangle DONE, gap cap 16");
+      ESP_LOGI(TAG, "Protocol %u (burst, content aware)", stream_.version());
     if (r.status == protocol::READY_BRIGHTNESS) {
       ESP_LOGI(TAG, "Live brightness capability confirmed");
       if (brightness_selected_) stream_.request_brightness(brightness_percent_);
@@ -985,6 +1062,7 @@ void NSPanelDisplay::request_enter() {
   dirty_.all();
   rx_count_ = 0;
   state_ = State::BOOT_WAIT;
+  wake_transport_();
   deadline_ = millis() + 300;
 }
 void NSPanelDisplay::request_tft_upload() {
@@ -1007,6 +1085,7 @@ void NSPanelDisplay::request_brightness(int percent) {
   brightness_selected_ = true;
   if (state_ == State::STREAM && stream_.live_brightness()) {
     stream_.request_brightness(brightness_percent_);
+    wake_transport_();
     return;
   }
   brightness_pending_ = true;
@@ -1547,6 +1626,8 @@ void NSPanelDisplay::loop() {
 }
 void NSPanelDisplay::on_shutdown() {
   task_stop_ = true;
+  wake_transport_();
+  signal_slot_();
   while (task_running_) vTaskDelay(1);
   while (upload_running_) {
     App.feed_wdt();

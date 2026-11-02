@@ -13,7 +13,7 @@ static std::vector<uint8_t> reply(unsigned status, uint32_t consumed, unsigned r
   std::vector<uint8_t> b(32);
   b[0] = 'S';
   b[1] = 'R';
-  b[2] = 7;
+  b[2] = 8;
   b[3] = uint8_t(status);
   protocol::put16(b, 4, SESSION);
   protocol::put16(b, 8, consumed);

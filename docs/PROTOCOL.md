@@ -8,7 +8,7 @@ terminal (EU landscape or US portrait). It is implemented by
 contract.
 
 The ESP32 owns the display UART during a session. The terminal accepts
-COBS-framed protocol-7 records with a session, sequence number and CRC16, and
+COBS-framed protocol-8 records with a session, sequence number and CRC16, and
 answers with 32-byte reverse reports. Pixels are PackBits-compressed RGB565
 rectangles; there is no framebuffer on the display.
 
@@ -40,10 +40,10 @@ delimiter. The decoder:
 - treats a nonzero byte as data (except the first byte of a block, which is the
   COBS code);
 - inserts a zero after every code block except when the code is `0xFF`;
-- ends the frame at the delimiter and checks that the decoded length and CRC
+- ends the frame at the delimiter and checks that the decoded length and PackBits state
   are complete.
 
-A record is at most **537 encoded bytes** plus the delimiter (538 bytes on the
+A record is at most **535 encoded bytes** plus the delimiter (536 bytes on the
 wire). The encoded limit is enforced independently of the decoded body limit.
 
 ## Record header
@@ -53,7 +53,7 @@ The decoded header is exactly 20 bytes. All integers are little endian.
 | Offset | Size | Field |
 | --- | ---: | --- |
 | 0..1 | 2 | `R` `S` magic |
-| 2 | 1 | Protocol version, **7** |
+| 2 | 1 | Protocol version, **8** |
 | 3 | 1 | Kind (see below) |
 | 4..5 | 2 | Session id, nonzero |
 | 6..7 | 2 | Sequence, modulo 65536 |
@@ -64,9 +64,10 @@ The decoded header is exactly 20 bytes. All integers are little endian.
 | 16..17 | 2 | `height` |
 | 18..19 | 2 | CRC16-CCITT over bytes 0..17, initial `0xFFFF` |
 
-The body follows immediately. A uint16 CRC16-CCITT over the complete header
-and body follows the body; its initial value is also `0xFFFF`. The header CRC
-and semantic checks must pass before any body bytes can reach the LCD.
+The body follows immediately, with no trailer or body checksum. The header CRC
+and semantic checks must pass before any body bytes can reach the LCD. Reverse
+reports retain their CRC16. Protocols 6 and 7 used a two-byte whole-record CRC;
+the sender now supports only protocol 8 and rejects older receivers.
 
 ## Record kinds
 
@@ -97,7 +98,7 @@ Validation rules:
 - An unknown kind, wrong session, bad CRC, oversized body or invalid geometry
   is a protocol error.
 
-`RECT` configures the window only after the whole record has passed its CRC.
+`RECT` configures the window only after the whole record has passed header and structural checks.
 `END` increments the completed-rectangle counter but does not imply a tear-free
 frame; it means the bytes were validated and emitted.
 
@@ -114,17 +115,20 @@ Runs are 1..128 pixels. The decoder checks each run against the rectangle's
 remaining pixel bytes before writing. Pixels are written directly to the LCD;
 there is no rectangle-sized buffer in the display.
 
-Pixel writes are optimistic: the body CRC is checked after the pixels have been
-streamed. A damaged `DATA` record can therefore have written pixels before the
-error is detected. **Recovery requires `SYNC` and a full redraw of the affected
-rectangle.** The terminal does not replay a block into the LCD's current
-cursor.
+Body bytes are not checksummed. Pixel corruption and structurally valid token
+corruption are accepted silently and may remain visible until repaint. Invalid
+runs, incomplete pixels, body length/COBS errors and incorrect final pixel
+counts cause a fault. Recovery requires SYNC and a redraw of the affected area.
+
+The receiver consumes contiguous COBS DATA spans with local PackBits state.
+Spans stop at DMA availability, ring wrap, body/code boundaries and the existing
+32-encoded-byte service budget. Implicit zeros use the checked byte path; the
+USART/DMA checks, touch polling and watchdog remain in the outer loop.
 
 ## Live brightness
 
 `BRIGHTNESS` (kind 7) is the live-brightness extension. It has no body; the
-percentage is in the header's `x` field. The header and whole-record CRCs
-protect the value. It is accepted only between rectangles.
+percentage is in the header's `x` field. The header CRC protects the value. It is accepted only between rectangles.
 
 After validation, the receiver calls the stock backlight routine at
 `0x0800BBFC` with `force=1`, which updates the saved brightness byte and the
@@ -149,7 +153,7 @@ A report is 32 unescaped bytes:
 | Offset | Size | Field |
 | --- | ---: | --- |
 | 0..1 | 2 | `S` `R` magic |
-| 2 | 1 | Protocol version, 7 |
+| 2 | 1 | Protocol version, 8 |
 | 3 | 1 | Status (see below) |
 | 4..5 | 2 | Session id |
 | 6..7 | 2 | Next expected sequence |
@@ -227,7 +231,7 @@ not an acknowledgement of a whole block.
 
 ## Compatibility
 
-- Protocol version 7 is tied to our native revision 93 on both panel profiles.
+- Protocol version 8 is tied to our native revision 94 on both panel profiles.
   Stock images report 72 and are rejected by the component. Panel geometry is
   selected by `width`/`height` and checked separately by the display loader, not
   inferred from the native version. Do not mix a component and TFT from
@@ -243,8 +247,8 @@ not an acknowledgement of a whole block.
 
 ## Bursts and host compatibility
 
-The host selects the wire version from READY. Native 92 / protocol 6 keeps
-per-rectangle DONE and the 16-tile gap cap. Native 93 / protocol 7 sends
+The host requires protocol 8 in READY and native 94 in the connect identity.
+It sends
 consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group.
 Only the final END emits DONE. PROGRESS byte credits and touch reports continue
 throughout; the 512-byte window and 1 KiB DMA ring are unchanged.
@@ -262,5 +266,12 @@ display dirty for recovery; earlier snapshots may already have been reused. A
 single-rectangle burst retains the existing bounded SYNC/retry path. These
 completion semantics do not provide atomic or tear-free display updates.
 
-Update the host before the TFT: the new host supports both wire versions; an
-old host rejects protocol 7. Native 93 packages require the matching host.
+The host and TFT must be a matching protocol-8/native-94 pair.
+Protocol 6/7 receivers are rejected; no legacy framing is generated.
+
+### Protocol 8 migration
+
+Native 94 requires a host that accepts reverse protocol 8 and emits records
+without a whole-record CRC. Install a matching ESP32 host and TFT together:
+the new host rejects native 92/93, and older hosts reject native 94. The EU TFT has an initial upload/redraw hardware smoke check; the US TFT
+remains offline-validated only.

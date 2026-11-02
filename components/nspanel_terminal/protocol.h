@@ -17,7 +17,7 @@
 namespace esphome::nspanel_terminal::protocol {
 enum { RECT = 1, DATA, END, PING, EXIT, SYNC, BRIGHTNESS };
 enum { READY = 128, BYE, PROGRESS, ERROR, SYNCED, DONE, READY_BRIGHTNESS, BRIGHTNESS_DONE };
-constexpr unsigned WINDOW = 512, PAYLOAD = 512;
+constexpr unsigned VERSION = 8, WINDOW = 512, PAYLOAD = 512;
 inline unsigned get16(const uint8_t *p) { return unsigned(p[0]) | (unsigned(p[1]) << 8); }
 inline uint32_t get32(const uint8_t *p) { return get16(p) | (uint32_t(get16(p + 2)) << 16); }
 inline void put16(std::vector<uint8_t> &p, unsigned at, unsigned n) {
@@ -68,13 +68,12 @@ inline std::vector<uint8_t> cobs(const std::vector<uint8_t> &raw) {
   return out;
 }
 inline std::vector<uint8_t> record(unsigned session, unsigned seq, unsigned kind, unsigned x = 0, unsigned y = 0,
-                                   unsigned w = 0, unsigned h = 0, const std::vector<uint8_t> &body = {},
-                                   unsigned version = 6) {
+                                   unsigned w = 0, unsigned h = 0, const std::vector<uint8_t> &body = {}) {
   if (body.size() > PAYLOAD) return {};
   std::vector<uint8_t> b(20);
   b[0] = 'R';
   b[1] = 'S';
-  b[2] = uint8_t(version);
+  b[2] = VERSION;
   b[3] = uint8_t(kind);
   put16(b, 4, session);
   put16(b, 6, seq);
@@ -85,9 +84,6 @@ inline std::vector<uint8_t> record(unsigned session, unsigned seq, unsigned kind
   put16(b, 16, h);
   put16(b, 18, crc(b.data(), 18));
   b.insert(b.end(), body.begin(), body.end());
-  auto c = crc(b.data(), b.size());
-  b.push_back(uint8_t(c));
-  b.push_back(uint8_t(c >> 8));
   return cobs(b);
 }
 /* A sequential source is read exactly once per pixel. Two-pixel lookahead
@@ -193,19 +189,18 @@ class Encoder {
     return size != 0;
   }
 };
-// Stream header, immutable cached body and trailer into COBS output. CRC is
-// updated before COBS transformation; trailer bytes are excluded from the CRC.
+// Stream the checked header and immutable body into COBS output, without a trailer.
 NSPANEL_PROTOCOL_HOT inline void data_record(unsigned session, unsigned seq, const uint8_t *body,
-                                            size_t body_size, std::vector<uint8_t> &out, unsigned version = 6) {
+                                            size_t body_size, std::vector<uint8_t> &out) {
   if (body_size > PAYLOAD) { out.clear(); return; }
-  uint8_t header[20] = {'R', 'S', uint8_t(version), DATA};
+  uint8_t header[20] = {'R', 'S', VERSION, DATA};
   auto put = [&](unsigned at, unsigned value) {
     header[at] = uint8_t(value);
     header[at + 1] = uint8_t(value >> 8);
   };
   put(4, session); put(6, seq); put(8, body_size);
   put(18, crc(header, 18));
-  out.resize(538);
+  out.resize(536);
   uint8_t *dest = out.data();
   size_t size = 1, mark = 0;
   unsigned code = 1;
@@ -223,21 +218,15 @@ NSPANEL_PROTOCOL_HOT inline void data_record(unsigned session, unsigned seq, con
       }
     }
   };
-  uint16_t checksum = 65535;
-  for (uint8_t byte : header) { checksum = crc_step(checksum, byte); emit(byte); }
-  for (size_t i = 0; i < body_size; ++i) {
-    const uint8_t byte = body[i];
-    checksum = crc_step(checksum, byte);
-    emit(byte);
-  }
-  emit(uint8_t(checksum)); emit(uint8_t(checksum >> 8));
+  for (uint8_t byte : header) emit(byte);
+  for (size_t i = 0; i < body_size; ++i) emit(body[i]);
   dest[mark] = uint8_t(code);
   dest[size++] = 0;
   out.resize(size);
 }
 inline void data_record(unsigned session, unsigned seq, const std::vector<uint8_t> &body,
-                        std::vector<uint8_t> &out, unsigned version = 6) {
-  data_record(session, seq, body.data(), body.size(), out, version);
+                        std::vector<uint8_t> &out) {
+  data_record(session, seq, body.data(), body.size(), out);
 }
 
 constexpr unsigned RESPONSE = 32;
@@ -246,7 +235,7 @@ struct Reply {
   uint32_t consumed = 0;
 };
 inline bool reply(const uint8_t *p, unsigned session, Reply &r) {
-  if (p[0] != 'S' || p[1] != 'R' || (p[2] != 6 && p[2] != 7) || get16(p + 4) != session ||
+  if (p[0] != 'S' || p[1] != 'R' || p[2] != VERSION || get16(p + 4) != session ||
       get16(p + 26) != WINDOW ||
       crc(p, 30) != get16(p + 30))
     return false;

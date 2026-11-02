@@ -1,6 +1,12 @@
 # NSPanel terminal
 
-Release 0.7.1.
+Development candidate: native 94 / protocol 8 (unreleased).
+
+The EU candidate passed an initial hardware upload and redraw smoke check on
+2 November 2026. The US candidate remains validated offline only. The candidate removes the body CRC and
+adds span decoding; no performance gain has yet been measured on hardware.
+The development sender requires native 94 / protocol 8; it rejects native
+92/93 and no longer emits protocol 6/7 records.
 
 
 Turn an EU or US Sonoff NSPanel into a general-purpose ESPHome display and
@@ -14,10 +20,10 @@ targets the NSPanel display `NX4832F035_011C` (MCU code F130), not NSPanel Pro.
 
 | Panel | Orientation | Screen size | Firmware version | Image to install | SHA-256 |
 | --- | --- | --- | ---: | --- | --- |
-| EU | landscape | 454×320 in a 480×320 controller | 93 | `firmware/terminal-eu.tft` | `925b0f35…3c0ae3c` |
-| US | portrait | 320×480 | 93 | `firmware/terminal-us.tft` | `20ba711b…404e73c` |
+| EU | landscape | 454×320 in a 480×320 controller | 94 | `firmware/terminal-eu.tft` | `1a8cd088…f92df3` |
+| US | portrait | 320×480 | 94 | `firmware/terminal-us.tft` | `98b2a5f6…a441c3d` |
 
-Both terminal images report native revision 93. Both retained bases are
+Both terminal images report native revision 94. Both retained bases are
 unmodified 72 exports (the EU Editor export and the stock US export); the EU
 build applies EU native patches, while the US build leaves the
 stock US native code alone. Panel geometry is
@@ -30,7 +36,7 @@ running. If ESPHome stops sending data, the panel returns to its blank fallback
 page after about three seconds, so a crashed or disconnected host does not leave
 the screen frozen.
 
-The EU image has been tested on a real EU panel. The US image is built from the
+The native 94 EU image passed an initial hardware upload/redraw smoke check. The US image is built from the
 stock US image and validated offline (package structure and checksums); it has not been run on US hardware yet. Treat it as experimental and
 keep the original US image for rollback.
 

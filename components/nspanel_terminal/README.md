@@ -12,8 +12,8 @@ The component supports the two panel geometries:
 
 | Panel | `width` | `height` | Visible area | Native |
 | --- | ---: | ---: | --- | ---: |
-| EU | 454 (default) | 320 (default) | 454×320 in a 480×320 controller | 93 |
-| US | 320 | 480 | full 320×480 | 93 |
+| EU | 454 (default) | 320 (default) | 454×320 in a 480×320 controller | 94 |
+| US | 320 | 480 | full 320×480 | 94 |
 
 ```yaml
 display:
@@ -38,8 +38,8 @@ deprecated.
 `width` and `height` also set the display metadata used by LVGL. Other sizes
 are rejected. Select the orientation with these values; a non-zero display
 `rotation` is rejected, and the panel's native project already supplies the
-correct orientation. The included images report native revision 93; the component also
-accepts revision 92 for protocol 6 compatibility. The display loader checks the
+correct orientation. The included images report native revision 94; the component
+requires native 94 / protocol 8 and rejects revisions 92/93. The display loader checks the
 stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the
 reverse) fails safely instead of streaming into the wrong framebuffer.
 
