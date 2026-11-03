@@ -129,7 +129,6 @@ int main() {
   feed(shifted, ready);
   assert(!shifted.failed());
   assert(shifted.stage() == StreamEngine::Stage::IDLE);
-  assert(shifted.reverse_shifts() > 0);
 
   // A malformed contact or Goodix I2C fault is not a transport fault.
   StreamEngine touch;

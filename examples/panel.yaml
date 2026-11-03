@@ -59,7 +59,7 @@ captive_portal:
 #     type: local
 #     path: /path/to/nspanel-terminal/components
 external_components:
-  - source: github://ptaru/nspanel-terminal@v0.7.1
+  - source: github://ptaru/nspanel-terminal@v0.8.0
     components: [nspanel_terminal]
 
 # Keep the display powered during TFT updates.
@@ -97,8 +97,6 @@ touchscreen:
   - platform: nspanel_terminal
     id: panel_touch
     display: panel
-    # Kept for the v0.7.1 example pin; display: is authoritative.
-    panel_id: panel
     calibration:
       x_min: 0
       x_max: 453

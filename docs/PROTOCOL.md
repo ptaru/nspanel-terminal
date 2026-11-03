@@ -1,16 +1,8 @@
 # Terminal protocol
 
-This is the wire format between the ESP32 host component and the NSPanel display
-terminal (EU landscape or US portrait). It is implemented by
-[`firmware/src/stream_protocol.h`](../firmware/src/stream_protocol.h) and
-[`components/nspanel_terminal/`](../components/nspanel_terminal/). See
-[display firmware internals](FIRMWARE.md) for the display-side memory and entry
-contract.
+This is the wire format between the ESP32 host component and the NSPanel display terminal (EU landscape or US portrait). It is implemented by [`firmware/src/stream_protocol.h`](../firmware/src/stream_protocol.h) and [`components/nspanel_terminal/`](../components/nspanel_terminal/). See [display firmware internals](FIRMWARE.md) for the display-side memory and entry contract.
 
-The ESP32 owns the display UART during a session. The terminal accepts
-COBS-framed protocol-8 records with a session, sequence number and CRC16, and
-answers with 32-byte reverse reports. Pixels are PackBits-compressed RGB565
-rectangles; there is no framebuffer on the display.
+The ESP32 owns the display UART during a session. The terminal accepts COBS-framed protocol-8 records with a session, sequence number and header CRC16, and answers with 32-byte reverse reports. Pixels are PackBits-compressed RGB565 rectangles; there is no framebuffer on the display.
 
 ## Session entry and exit
 
@@ -22,29 +14,19 @@ The host enters the terminal through the stock `touch_j` path with:
 | `sys1` | Touch polling, 0 or 1 |
 | `sys2` low 16 bits | Nonzero session id |
 
-The terminal switches to the requested baud, configures DMA, and sends READY
-(status 134 for this build, because it supports live brightness). A host that
-sees 128 is connected to a terminal without live brightness and must use
-command-mode brightness.
+The terminal switches to the requested baud, configures DMA and sends READY (status 134 for the supplied TFTs).
 
-`EXIT` or the display watchdog returns to the stock blank page at 115200 baud.
-The host saves the page, `bkcmd` and `sys0..2` before entry and restores and
-verifies them after exit. Terminal entry/exit is documented in
-[FIRMWARE.md](FIRMWARE.md#entry-and-exit).
+`EXIT` or the display watchdog returns to the stock blank page at 115200 baud. The host saves the page, `bkcmd` and `sys0..2` before entry and restores and verifies them after exit. Terminal entry/exit is documented in [FIRMWARE.md](FIRMWARE.md#entry-and-exit).
 
 ## Framing
 
-Each forward record is COBS-encoded and terminated by a single `0x00`
-delimiter. The decoder:
+Each forward record is COBS-encoded and terminated by a single `0x00` delimiter. The decoder:
 
-- treats a nonzero byte as data (except the first byte of a block, which is the
-  COBS code);
+- treats a nonzero byte as data (except the first byte of a block, which is the COBS code);
 - inserts a zero after every code block except when the code is `0xFF`;
-- ends the frame at the delimiter and checks that the decoded length and PackBits state
-  are complete.
+- ends the frame at the delimiter and checks that the decoded length and PackBits state are complete.
 
-A record is at most **535 encoded bytes** plus the delimiter (536 bytes on the
-wire). The encoded limit is enforced independently of the decoded body limit.
+A record is at most **535 encoded bytes** plus the delimiter (536 bytes on the wire). The encoded limit is enforced independently of the decoded body limit.
 
 ## Record header
 
@@ -64,10 +46,7 @@ The decoded header is exactly 20 bytes. All integers are little endian.
 | 16..17 | 2 | `height` |
 | 18..19 | 2 | CRC16-CCITT over bytes 0..17, initial `0xFFFF` |
 
-The body follows immediately, with no trailer or body checksum. The header CRC
-and semantic checks must pass before any body bytes can reach the LCD. Reverse
-reports retain their CRC16. Protocols 6 and 7 used a two-byte whole-record CRC;
-the sender now supports only protocol 8 and rejects older receivers.
+The body follows immediately, with no trailer or body checksum. The header CRC and semantic checks must pass before any body bytes can reach the LCD. Reverse reports have their own CRC16.
 
 ## Record kinds
 
@@ -83,68 +62,32 @@ the sender now supports only protocol 8 and rejects older receivers.
 
 Validation rules:
 
-- `RECT` requires no active rectangle, a zero body, `w` and `h` nonzero, and a
-  rectangle inside the configured panel: `x < W`, `y < H`, `w <= W - x` and
-  `h <= H - y`, where `W×H` is 454×320 (EU) or 320×480 (US).
-- `DATA` requires an active rectangle and a nonzero body. Its body must decode
-  to a whole number of pixels; an incomplete PackBits token is an error.
+- `RECT` requires no active rectangle, a zero body, `w` and `h` nonzero, and a rectangle inside the configured panel: `x < W`, `y < H`, `w <= W - x` and `h <= H - y`, where `W×H` is 454×320 (EU) or 320×480 (US).
+- `DATA` requires an active rectangle and a nonzero body. Its body must decode to a whole number of pixels; an incomplete PackBits token is an error.
 - `END` requires an active rectangle, exactly zero remaining pixel bytes, `x=0..1` and zero `y/w/h`. `x=0` continues the burst; `x=1` requests DONE.
 - `PING`, `EXIT` and `SYNC` require no body and zero geometry.
-- `BRIGHTNESS` requires no active rectangle, no body, zero `y/w/h` and
-  `x <= 100`.
-- Normal records must match the expected sequence. `SYNC` is accepted after a
-  fault and may carry any sequence; the next record must use `SYNC`'s sequence
-  plus one.
-- An unknown kind, wrong session, bad CRC, oversized body or invalid geometry
-  is a protocol error.
+- `BRIGHTNESS` requires no active rectangle, no body, zero `y/w/h` and `x <= 100`.
+- Normal records must match the expected sequence. `SYNC` is accepted after a fault and may carry any sequence; the next record must use `SYNC`'s sequence plus one.
+- An unknown kind, wrong session, bad CRC, oversized body or invalid geometry is a protocol error.
 
-`RECT` configures the window only after the whole record has passed header and structural checks.
-`END` increments the completed-rectangle counter but does not imply a tear-free
-frame; it means the bytes were validated and emitted.
+`RECT` configures the window only after the whole record has passed header and structural checks. `END` increments the completed-rectangle counter but does not imply a tear-free frame; it means the bytes were validated and emitted.
 
 ## PackBits body
 
 `DATA` carries RGB565 pixels, **high byte first**. A token is one byte:
 
-- high bit 0: literal run. Low seven bits are `run - 1`; the next `2 * run`
-  bytes are that many RGB565 pixels.
-- high bit 1: repeat run. Low seven bits are `run - 1`; the next two bytes are
-  one RGB565 pixel, repeated `run` times.
+- high bit 0: literal run. Low seven bits are `run - 1`; the next `2 * run` bytes are that many RGB565 pixels.
+- high bit 1: repeat run. Low seven bits are `run - 1`; the next two bytes are one RGB565 pixel, repeated `run` times.
 
-Runs are 1..128 pixels. The decoder checks each run against the rectangle's
-remaining pixel bytes before writing. Pixels are written directly to the LCD;
-there is no rectangle-sized buffer in the display.
+Runs are 1..128 pixels. The decoder checks each run against the rectangle's remaining pixel bytes before writing. Pixels are written directly to the LCD; there is no rectangle-sized buffer in the display.
 
-Body bytes are not checksummed. Pixel corruption and structurally valid token
-corruption are accepted silently and may remain visible until repaint. Invalid
-runs, incomplete pixels, body length/COBS errors and incorrect final pixel
-counts cause a fault. Recovery requires SYNC and a redraw of the affected area.
+Body bytes are not checksummed. Pixel corruption and structurally valid token corruption are accepted silently and may remain visible until repaint. Invalid runs, incomplete pixels, body length/COBS errors and incorrect final pixel counts cause a fault. Recovery requires SYNC and a redraw of the affected area.
 
-The receiver consumes contiguous COBS DATA spans with local PackBits state.
-Spans stop at DMA availability, ring wrap, body/code boundaries and the existing
-32-encoded-byte service budget. Implicit zeros use the checked byte path; the
-USART/DMA checks, touch polling and watchdog remain in the outer loop.
+The receiver consumes contiguous COBS DATA spans with local PackBits state. Spans stop at DMA availability, ring wrap, body/code boundaries and a 32-encoded-byte service budget. Implicit zeros use the checked byte path; the USART/DMA checks, touch polling and watchdog remain in the outer loop.
 
 ## Live brightness
 
-`BRIGHTNESS` (kind 7) is the live-brightness extension. It has no body; the
-percentage is in the header's `x` field. The header CRC protects the value. It is accepted only between rectangles.
-
-After validation, the receiver calls the stock backlight routine at
-`0x0800BBFC` with `force=1`, which updates the saved brightness byte and the
-PB8/TIM16 backlight output. It then reports **status 135**. The change is
-applied without leaving the terminal.
-
-Capability negotiation:
-
-| Terminal | READY status | Host behaviour |
-| --- | ---: | --- |
-| This build | 134 | Queue a `BRIGHTNESS` record at the next idle point; wait for 135. |
-| EU or US native without live brightness | 128 | Use command-mode brightness, which briefly exits the terminal. |
-
-A host without live-brightness support must be updated **before** the TFT: it
-rejects status 134 safely and cannot stream to the live-brightness image. The
-current component implements both paths.
+A `BRIGHTNESS` record applies its percentage between rectangles. The receiver calls the stock backlight routine at `0x0800BBFC` with `force=1` and reports `BRIGHTNESS_DONE` (135). The host waits for this acknowledgement before issuing another control operation.
 
 ## Reverse reports
 
@@ -191,87 +134,42 @@ Flags:
 | `0x1000` | Credit/ring violation. |
 | `0x2000` | Host-inactivity timeout (3,000 ms). |
 
-`touch.fresh` is 1 for a valid report, 2 for malformed contact data and 3 for
-an I2C/ACK failure. Bit 5 of the touch mask is sticky fault indication. Only
-one pointer is forwarded.
+`touch.fresh` is 1 for a valid report, 2 for malformed contact data and 3 for an I2C/ACK failure. Bit 5 of the touch mask is sticky fault indication. Only one pointer is forwarded.
 
 ## Flow control
 
-The host may have at most **512 encoded bytes outstanding** beyond the last
-reported consumed offset. The count includes COBS code bytes and delimiters.
+The host may have at most **512 encoded bytes outstanding** beyond the last reported consumed offset. The count includes COBS code bytes and delimiters.
 
 The terminal publishes credits:
 
 - approximately every 256 consumed bytes;
-- on any record event, including `SYNC`, final `END`, `EXIT`, an error or a
-  brightness acknowledgement;
+- on any record event, including `SYNC`, final `END`, `EXIT`, an error or a brightness acknowledgement;
 - when a fresh touch report is available.
 
-These are byte credits, not per-record acknowledgements. The host keeps the
-reverse UART drained, fills the available window, and does not need to stop at
-every record boundary. The 1 KiB DMA ring is larger than the 512-byte window so
-a conforming sender cannot overwrite unread bytes while the display polls
-touch.
+These are byte credits, not per-record acknowledgements. The host keeps the reverse UART drained, fills the available window, and does not need to stop at every record boundary. The 1 KiB DMA ring is larger than the 512-byte window so a conforming sender cannot overwrite unread bytes while the display polls touch.
 
-A `PROGRESS` report's sequence can describe a partially received record; it is
-not an acknowledgement of a whole block.
+A `PROGRESS` report's sequence can describe a partially received record; it is not an acknowledgement of a whole block.
 
 ## Errors, resync and watchdog
 
-- A malformed header, bad CRC, premature `END`, incorrect pixel count, bad
-  COBS frame or sequence mismatch sets a protocol fault.
-- After a fault, no pixels are written until a valid `SYNC`; the sender must
-  redraw the entire affected rectangle.
-- USART/DMA errors, a credit/ring violation or 3,000 ms without input stop the
-  session and restore the stock runtime. A fresh entry is required.
-- A CRC or credit error in a reverse report makes the host stop sending and
-  recover through the display watchdog or an explicit exit.
-- The display watchdog returns to the blank page after about 3 seconds of host
-  silence. It covers host silence, not a hung display or a failed ESP32 image.
+- A malformed header, bad CRC, premature `END`, incorrect pixel count, bad COBS frame or sequence mismatch sets a protocol fault.
+- After a fault, no pixels are written until a valid `SYNC`; the sender must redraw the entire affected rectangle.
+- USART/DMA errors, a credit/ring violation or 3,000 ms without input stop the session and restore the stock runtime. A fresh entry is required.
+- A CRC or credit error in a reverse report makes the host stop sending and recover through the display watchdog or an explicit exit.
+- The display watchdog returns to the blank page after about 3 seconds of host silence. It covers host silence, not a hung display or a failed ESP32 image.
 
 ## Compatibility
 
-- Protocol version 8 is tied to our native revision 94 on both panel profiles.
-  Stock images report 72 and are rejected by the component. Panel geometry is
-  selected by `width`/`height` and checked separately by the display loader, not
-  inferred from the native version. Do not mix a component and TFT from
-  different protocol revisions or panel profiles.
-- The live-brightness extension uses kind 7, READY 134 and BRIGHTNESS_DONE 135.
-  A host without live-brightness support safely falls back from 134, but cannot
-  drive the live-brightness extension.
-- A new record kind, status, field meaning or pixel format is an incompatible
-  protocol change. Bump the version and ship a matching host and TFT.
-- The display UART must be owned exclusively by `nspanel_terminal` during a
-  session. Do not configure ESPHome's separate `nextion` component on the same
-  UART.
+- Protocol version 8 is tied to our native revision 94 on both panel profiles. Stock images report 72 and are rejected by the component. Panel geometry is selected by `width`/`height` and checked separately by the display loader, not inferred from the native version. Do not mix a component and TFT from different protocol revisions or panel profiles.
+- A new record kind, status, field meaning or pixel format is an incompatible protocol change. Bump the version and ship a matching host and TFT.
+- The display UART must be owned exclusively by `nspanel_terminal` during a session. Do not configure ESPHome's separate `nextion` component on the same UART.
 
 ## Bursts and host compatibility
 
-The host requires protocol 8 in READY and native 94 in the connect identity.
-It sends
-consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group.
-Only the final END emits DONE. PROGRESS byte credits and touch reports continue
-throughout; the 512-byte window and 1 KiB DMA ring are unchanged.
+The host requires protocol 8 in READY and native 94 in the connect identity. It sends consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group. Only the final END emits DONE. PROGRESS byte credits and touch reports continue throughout; the window is 512 bytes and the DMA ring is 1 KiB.
 
-The production sender closes a burst when its queued flush areas and reserved
-producer slots drain, or after 255 rectangles, so ongoing drawing cannot postpone
-acknowledgements indefinitely. Each LVGL flush is encoded into
-16-row strips; DATA records may cross row boundaries. The host reuses a strip only after END has been queued in full and
-no retry can read it. A single final rectangle can retry, so its snapshot remains
-reserved until DONE. Non-final and multi-rectangle bursts cannot retry.
+The production sender closes a burst when its queued flush areas and reserved producer slots drain, or after 255 rectangles, so ongoing drawing cannot postpone acknowledgements indefinitely. Each LVGL flush is encoded into 16-row strips; DATA records may cross row boundaries. The host reuses a strip only after END has been queued in full and no retry can read it. A single final rectangle can retry, so its snapshot remains reserved until DONE. Non-final and multi-rectangle bursts cannot retry.
 
-DONE must match the expected cumulative rectangle count, modulo 65536. A
-protocol error in a multi-rectangle burst stops the session and marks the whole
-display dirty for recovery; earlier snapshots may already have been reused. A
-single-rectangle burst retains the existing bounded SYNC/retry path. These
-completion semantics do not provide atomic or tear-free display updates.
+DONE must match the expected cumulative rectangle count, modulo 65536. A protocol error in a multi-rectangle burst stops the session and marks the whole display dirty for recovery; snapshots may already have been reused. A single-rectangle burst retains a bounded SYNC/retry path. These completion semantics do not provide atomic or tear-free display updates.
 
 The host and TFT must be a matching protocol-8/native-94 pair.
-Protocol 6/7 receivers are rejected; no legacy framing is generated.
-
-### Protocol 8 migration
-
-Native 94 requires a host that accepts reverse protocol 8 and emits records
-without a whole-record CRC. Install a matching ESP32 host and TFT together:
-the new host rejects native 92/93, and older hosts reject native 94. The EU TFT has an initial upload/redraw hardware smoke check; the US TFT
-remains offline-validated only.

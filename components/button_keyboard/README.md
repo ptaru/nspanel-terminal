@@ -1,16 +1,10 @@
 # button_keyboard
 
-An optional text-entry keyboard for ESPHome LVGL built from one `lv_button`
-per key. It provides four stock-style layouts and textarea editing, with
-individual objects for styling and small key redraws. It works independently
-of the NSPanel terminal.
+An optional text-entry keyboard for ESPHome LVGL built from one `lv_button` per key. It provides four stock-style layouts and textarea editing, with individual objects for styling and small key redraws. It works independently of the NSPanel terminal.
 
 ## Try the stock keyboard first
 
-The stock `lvgl.keyboard` can also redraw individual keys. With the default
-pressed-state styles, LVGL marks the whole matrix dirty when its pressed state
-changes. Removing those styles avoids that redraw; a draw-task callback restores
-visible feedback for the selected key. This needs no external component:
+The stock `lvgl.keyboard` can also redraw individual keys. With the default pressed-state styles, LVGL marks the whole matrix dirty when its pressed state changes. Removing those styles avoids that redraw; a draw-task callback restores visible feedback for the selected key. This needs no external component:
 
 ```yaml
 esphome:
@@ -37,24 +31,15 @@ esphome:
             }, LV_EVENT_DRAW_TASK_ADDED, nullptr);
 ```
 
-Merge these entries into your existing configuration. This example targets 
-ESPHome 2026.10.1 / LVGL 9.5.0; draw-task events use 
-`LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS` in that version. The boot lambda must run 
-after widget creation, and pressed-state styles added later can reintroduce
-broad redraws.
+Merge these entries into your existing configuration. This example targets ESPHome 2026.10.1 / LVGL 9.5.0; draw-task events use `LV_OBJ_FLAG_SEND_DRAW_TASK_EVENTS` in that version. The boot lambda must run after widget creation, and pressed-state styles added later can reintroduce broad redraws.
 
-Use the custom component below when you want separate key objects, ordinary
-per-button styles or configurable repeat timing. It uses more memory, and is
-not required merely to avoid whole-matrix pressed-state redraws.
+Use the custom component below when you want separate key objects, ordinary per-button styles or configurable repeat timing. It uses more memory, and is not required merely to avoid whole-matrix pressed-state redraws.
 
 ## Requirements
 
 - ESPHome 2026.10.x.
-- LVGL with the `button`, `label` and `textarea` widgets. The component enables
-  those widgets when it is compiled.
-- LVGL's built-in Montserrat 14 font is enabled (the default) so the action-key
-  symbols render. If you disable it, enable a font that contains the
-  FontAwesome symbol glyphs.
+- LVGL with the `button`, `label` and `textarea` widgets. The component enables those widgets when it is compiled.
+- LVGL's built-in Montserrat 14 font is enabled (the default) so the action-key symbols render. If you disable it, enable a font that contains the FontAwesome symbol glyphs.
 
 ## Install
 
@@ -65,7 +50,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/ptaru/nspanel-terminal
-      ref: v0.7.1
+      ref: v0.8.0
     components: [button_keyboard]
 ```
 
@@ -79,21 +64,18 @@ external_components:
     components: [button_keyboard]
 ```
 
-The component is a **top-level `button_keyboard:` block**, not an `lvgl:`
-widget. It creates its container on a page you specify. The top-level block
-must be present for ESPHome to compile the component.
+The component is a **top-level `button_keyboard:` block**, not an `lvgl:` widget. It creates its container on a page you specify. The top-level block must be present for ESPHome to compile the component.
 
 ## Example
 
-This is a complete LVGL page and keyboard. Adjust the size and colours for your
-display.
+This is a complete LVGL page and keyboard. Adjust the size and colours for your display.
 
 ```yaml
 external_components:
   - source:
       type: git
       url: https://github.com/ptaru/nspanel-terminal
-      ref: v0.7.1
+      ref: v0.8.0
     components: [button_keyboard]
 
 lvgl:
@@ -160,9 +142,7 @@ button_keyboard:
     - logger.log: "cancelled"
 ```
 
-`font:` is optional. When set, it applies to character-key labels; action keys
-always use the built-in symbol font. Text labels such as `ABC`, `Space` and
-`1#` use the action-key font.
+`font:` is optional. When set, it applies to character-key labels; action keys always use the built-in symbol font. Text labels such as `ABC`, `Space` and `1#` use the action-key font.
 
 ## Options
 
@@ -185,8 +165,7 @@ always use the built-in symbol font. Text labels such as `ABC`, `Space` and
 | `on_ready` | none | Runs when OK is pressed, or Enter in a one-line textarea. |
 | `on_cancel` | none | Runs when Close is pressed. |
 
-If `character_key_style` or `key_style` is omitted, that key group is
-transparent; the example supplies both styles.
+If `character_key_style` or `key_style` is omitted, that key group is transparent; the example supplies both styles.
 
 ## Actions
 
@@ -198,9 +177,7 @@ Switch modes from YAML or lambdas:
     mode: NUMBER
 ```
 
-The C++ object also exposes `press_key(row, column)`, `get_key_button(row,
-column)`, `get_mode()` and `set_textarea(lv_obj_t *)` for scripted tests and
-accessibility integrations.
+The C++ object also exposes `press_key(row, column)`, `get_key_button(row, column)`, `get_mode()` and `set_textarea(lv_obj_t *)` for scripted tests and accessibility integrations.
 
 ## Layouts
 
@@ -213,25 +190,17 @@ The key maps follow LVGL 9's `lv_keyboard`:
 | `SPECIAL` | `1..0 Backspace`; `abc + & / * = % ! ? # < >`; `\ @ $ ( ) { } [ ] ; " '`; `Close ← Space → OK` |
 | `NUMBER` | `1 2 3 Close`; `4 5 6 OK`; `7 8 9 Backspace`; `+/- 0 . ← →` |
 
-Key widths use LVGL's relative weights, so each row fills the configured
-container. Backspace, Enter, the cursor arrows, OK and Close use LVGL's stock
-symbols (`LV_SYMBOL_*`); character labels use the configured `font`.
+Key widths use LVGL's relative weights, so each row fills the configured container. Backspace, Enter, the cursor arrows, OK and Close use LVGL's stock symbols (`LV_SYMBOL_*`); character labels use the configured `font`.
 
 ## Behaviour
 
-- Text is inserted at the textarea cursor with `lv_textarea_add_text`, so a
-  selection is replaced and `max_length`, `accepted_chars` and `password_mode`
-  are respected.
+- Text is inserted at the textarea cursor with `lv_textarea_add_text`, so a selection is replaced and `max_length`, `accepted_chars` and `password_mode` are respected.
 - Backspace deletes one character. The cursor arrows use LVGL's cursor calls.
 - Enter inserts a newline, or fires `on_ready` when the textarea is one-line.
 - `+/-` toggles the sign of the number at the cursor.
-- Character, Backspace, Enter, cursor and sign keys repeat while held. Mode,
-  OK and Close do not repeat. Releasing the key or losing the press stops the
-  repeat.
-- OK and Close fire `on_ready` / `on_cancel` and send `LV_EVENT_READY` /
-  `LV_EVENT_CANCEL` to the textarea.
-- The keys and container are not click-focusable, so using the keyboard does
-  not move focus away from the textarea or hide its caret.
+- Character, Backspace, Enter, cursor and sign keys repeat while held. Mode, OK and Close do not repeat. Releasing the key or losing the press stops the repeat.
+- OK and Close fire `on_ready` / `on_cancel` and send `LV_EVENT_READY` / `LV_EVENT_CANCEL` to the textarea.
+- The keys and container are not click-focusable, so using the keyboard does not move focus away from the textarea or hide its caret.
 
 ## Differences from `lvgl.keyboard`
 
@@ -247,15 +216,11 @@ symbols (`LV_SYMBOL_*`); character labels use the configured `font`.
 | Popovers | C API only | not implemented |
 | Custom/user key maps | C API only | not implemented |
 
-The main layout difference is configuration: this is a top-level component
-rather than an `lvgl:` widget.
+The main layout difference is configuration: this is a top-level component rather than an `lvgl:` widget.
 
 ## Memory
 
-Each key is an `lv_button` plus an `lv_label`, so the component uses more LVGL
-object memory than the single matrix used by `lvgl.keyboard`. Individual objects offer
-direct per-key styling and avoid the matrix's extra invalidation padding. On a memory-constrained board, measure the
-LVGL heap and consider enabling PSRAM or reducing the keyboard size.
+Each key is an `lv_button` plus an `lv_label`, so the component uses more LVGL object memory than the single matrix used by `lvgl.keyboard`. Individual objects offer direct per-key styling and avoid the matrix's extra invalidation padding. On a memory-constrained board, measure the LVGL heap and consider enabling PSRAM or reducing the keyboard size.
 
 ## License
 

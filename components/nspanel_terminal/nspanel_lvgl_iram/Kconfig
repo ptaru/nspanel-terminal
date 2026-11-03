@@ -1,0 +1,5 @@
+menu "NSPanel renderer placement"
+config NSPANEL_LVGL_IRAM
+    bool "Place selected LVGL software renderer objects in internal RAM"
+    default n
+endmenu

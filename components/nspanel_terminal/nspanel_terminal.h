@@ -34,7 +34,6 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   display::DisplayType get_display_type() override { return display::DISPLAY_TYPE_COLOR; }
   void request_exit() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
-    cancel_render_benchmark_("exit requested");
     exit_requested_ = true;
     stream_.request_exit();
     wake_transport_();
@@ -57,12 +56,7 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   }
   uint16_t width() const { return width_; }
   uint16_t height() const { return height_; }
-  // Diagnostic: stop all stream records without EXIT so the display watchdog runs.
-  void request_abandon();
   void set_touchscreen(NSPanelTouchscreen *t) { touchscreen_ = t; }
-  // Diagnostic instrumentation; off by default so production images stay quiet.
-  void set_diagnostics(bool enabled) { std::lock_guard<std::recursive_mutex> lock(mutex_); diagnostics_ = enabled; }
-  bool diagnostics() const { return diagnostics_; }
   void request_full_redraw() {
     std::lock_guard<std::recursive_mutex> lock(mutex_);
     request_repaint_();
@@ -72,27 +66,6 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     refresh_active_ = active;
   }
   std::recursive_mutex &transport_mutex() { return mutex_; }
-  unsigned completed_rectangles() const { return stream_.completed(); }
-  uint32_t bytes_sent() const { return stream_.sent_bytes(); }
-  unsigned heartbeats() const { return stream_.heartbeats(); }
-  unsigned resyncs() const { return resyncs_; }
-  unsigned faults() const { return faults_; }
-  unsigned loops() const { return loops_; }
-  unsigned max_loop_gap_ms() const { return max_gap_us_ / 1000; }
-  // RAM trace avoids per-event logging during a measurement.
-  void trace_edge(bool down, uint16_t x, uint16_t y);
-  void clear_trace() { trace_head_ = trace_count_ = 0; }
-  void log_timings();
-  void start_render_measurement();
-  void report_render_measurement();
-  void report_memory();
-  // One action, N full-screen LVGL redraws through the normal dirty-rectangle
-  // path. Each repeat is timed from the refresh start to the final DONE.
-  void start_render_benchmark(unsigned repeats = 5);
-  void start_protocol_benchmark();
-  void start_legacy_protocol_benchmark();
-  void start_legacy_protocol_benchmark_reuse();
-  void start_legacy_protocol_benchmark_preencoded();
 
  protected:
   int get_width_internal() override { return width_; }
@@ -131,7 +104,6 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
     uint8_t *cache = nullptr;
     size_t size = 0;
     uint16_t x = 0, y = 0, w = 0, h = 0;
-    uint32_t queued_us = 0, freed_us = 0;
   };
   std::array<FrameJob, JOB_SLOTS> jobs_{};
   uint8_t *job_storage_ = nullptr;
@@ -161,14 +133,6 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   SemaphoreHandle_t work_signal_ = nullptr;
   StaticSemaphore_t slot_signal_storage_{};
   SemaphoreHandle_t slot_signal_ = nullptr;
-  struct SchedulingStats {
-    uint32_t waits[5]{};
-    uint32_t forced_yields = 0, max_hold_us = 0;
-    uint32_t queued_count = 0, queued_max_us = 0;
-    uint64_t queued_us = 0;
-    uint32_t slot_count = 0, slot_max_us = 0;
-    uint64_t slot_us = 0;
-  } schedule_;
   void service_stream_(int incoming = -1);
   bool init_frame_jobs_();
   FrameJob *acquire_job_(std::unique_lock<std::recursive_mutex> &lock);
@@ -203,78 +167,16 @@ class NSPanelDisplay : public display::DisplayBuffer, public uart::UARTDevice {
   NSPanelTouchscreen *touchscreen_ = nullptr;
   TouchQueue pending_touches_;
   bool touch_reset_pending_ = false;
-  bool diagnostics_ = false;
-  unsigned resyncs_ = 0, faults_ = 0;
   unsigned dropped_touches_ = 0, dropped_frames_ = 0;
-  uint32_t submit_ms_ = 0, last_loop_us_ = 0, max_gap_us_ = 0, abandon_deadline_ = 0;
-  bool abandon_requested_ = false;
   bool upload_pending_ = false;
   int16_t initial_brightness_ = -1;
   uint8_t brightness_percent_ = 100;
   bool brightness_selected_ = false;
   bool brightness_pending_ = false, brightness_resume_ = false;
   std::string tft_url_;
-  unsigned loops_ = 0;
-  struct TraceEvent {
-    uint32_t t;
-    uint16_t a, b, c, d;
-    uint8_t type;
-  };
-  std::array<TraceEvent, 96> trace_buf_{};
-  unsigned trace_head_ = 0, trace_count_ = 0;
-  uint32_t measurement_bytes_ = 0, measurement_started_ms_ = 0;
-  uint32_t measurement_started_us_ = 0, measurement_first_submit_us_ = 0, measurement_last_done_us_ = 0;
-  unsigned measurement_rectangles_ = 0, measurement_faults_ = 0, measurement_resyncs_ = 0;
-  bool measurement_active_ = false;
-  bool benchmark_active_ = false;
-  bool benchmark_legacy_ = false;
-  bool benchmark_reuse_ = false;
-  bool benchmark_preencoded_ = false;
-  uint8_t *benchmark_cache_ = nullptr;
-  size_t benchmark_cache_size_ = 0;
-  uint8_t *benchmark_snapshot_ = nullptr;
-  unsigned benchmark_mode_ = 0, benchmark_next_ = 0;
-  uint32_t benchmark_started_ms_ = 0, benchmark_bytes_ = 0;
-  unsigned benchmark_rectangles_ = 0, benchmark_faults_ = 0, benchmark_resyncs_ = 0;
-  uint32_t benchmark_build_us_ = 0, benchmark_encode_us_ = 0;
-  unsigned benchmark_service_calls_ = 0, benchmark_credit_stalls_ = 0, benchmark_uart_stalls_ = 0;
-  unsigned benchmark_reports_ = 0, benchmark_highwater_ = 0;
-  unsigned benchmark_idle_credit_stalls_ = 0;
-  uint32_t benchmark_write_us_ = 0;
-  struct RenderStats {
-    uint32_t total_us = 0, refresh_us = 0, transfer_us = 0;
-    uint32_t copy_us = 0, encode_us = 0, write_us = 0;
-    uint32_t credit_wait_us = 0, uart_wait_us = 0, done_wait_us = 0;
-    uint32_t flush_work_us = 0, flush_max_us = 0, prepare_max_us = 0;
-    uint32_t service_last_us = 0, service_gap_max_us = 0;
-    uint32_t bytes = 0;
-    uint16_t rectangles = 0, credit_stalls = 0, uart_stalls = 0;
-    uint16_t service_calls = 0, reports = 0, faults = 0, resyncs = 0;
-  };
-  void begin_render_repeat_();
-  void finish_render_repeat_();
-  void log_render_summary_();
-  void close_render_wait_();
-  void cancel_render_benchmark_(const char *reason);
-  // Track the LVGL refresh independently of the snapshot gate. draw_pixels_at()
-  // starts the gate on the first flush, but only while this is true, so a direct
-  // bulk draw outside a refresh cannot leave refresh_active_ stuck.
+  // Track LVGL refreshes to gate frame snapshots until a refresh completes.
   void on_lvgl_refresh_start_();
   void on_lvgl_refresh_ready_();
-  bool render_benchmark_active_ = false, render_start_pending_ = false;
-  bool render_repeat_active_ = false, render_repeat_complete_ = false;
-  bool render_wait_refresh_ = false;
-  uint32_t render_refresh_started_us_ = 0, render_refresh_deadline_ms_ = 0;
-  unsigned render_repeats_ = 0, render_index_ = 0;
-  uint32_t render_repeat_started_us_ = 0, render_first_write_us_ = 0, render_last_write_us_ = 0;
-  uint32_t render_bytes_start_ = 0;
-  unsigned render_rect_start_ = 0, render_fault_start_ = 0, render_resync_start_ = 0;
-  uint8_t render_wait_kind_ = 0;
-  uint32_t render_wait_started_us_ = 0;
-  RenderStats render_stats_{};
-  std::array<RenderStats, 8> render_results_{};
-  void benchmark_report_();
-  void trace_(uint8_t type, uint16_t a = 0, uint16_t b = 0, uint16_t c = 0, uint16_t d = 0);
   static void task_entry_(void *arg);
   void task_loop_();
   mutable std::recursive_mutex mutex_;

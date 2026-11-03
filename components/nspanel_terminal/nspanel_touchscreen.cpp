@@ -19,7 +19,6 @@ bool NSPanelTouchscreen::new_report(bool down, uint16_t x, uint16_t y) {
   ++edges_;
   if (down != last_reported_) {
     last_reported_ = down;
-    if (panel_) panel_->trace_edge(down, x, y);
   }
   if (!queue_.push(down, x, y)) {
     ++drops_;

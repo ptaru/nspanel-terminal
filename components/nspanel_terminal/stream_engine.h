@@ -108,7 +108,6 @@ class StreamEngine {
           stage_ = Stage::BRIGHTNESS_ACK;
         } else if (uint32_t(now - last_wire_) >= 80) {
           tx_ = protocol::record(session_, seq_++, protocol::PING, 0, 0, 0, 0, {});
-          ++heartbeats_;
         }
         break;
       case Stage::RECT:
@@ -210,7 +209,6 @@ class StreamEngine {
       // and look for the next valid header instead of stopping the terminal.
       // A sustained bad stream still fails on the reverse timeout below; cap
       // consecutive misses so garbage cannot hide forever.
-      ++reverse_shifts_;
       if (++reverse_misses_ > 64) {
         fail("reverse integrity");
         return false;
@@ -319,14 +317,12 @@ class StreamEngine {
   unsigned mask() const { return mask_; }
   unsigned completed() const { return completed_; }
   uint32_t sent_bytes() const { return sent_; }
-  unsigned heartbeats() const { return heartbeats_; }
   unsigned touch_faults() const { return touch_faults_; }
-  unsigned reverse_shifts() const { return reverse_shifts_; }
   const char *error() const { return error_; }
 
  private:
   Stage stage_ = Stage::STOPPED;
-  unsigned session_ = 0, seq_ = 0, x_ = 0, y_ = 0, w_ = 0, h_ = 0, retries_ = 0, mask_ = 0, heartbeats_ = 0;
+  unsigned session_ = 0, seq_ = 0, x_ = 0, y_ = 0, w_ = 0, h_ = 0, retries_ = 0, mask_ = 0;
   unsigned width_ = 454, height_ = 320, burst_rects_ = 0;
   uint16_t completed_ = 0;
   uint32_t sent_ = 0, consumed_ = 0, last_wire_ = 0, last_report_ = 0;
@@ -342,7 +338,7 @@ class StreamEngine {
   size_t at_ = 0;
   uint8_t rx_[protocol::RESPONSE]{};
   unsigned have_ = 0;
-  unsigned touch_faults_ = 0, reverse_shifts_ = 0, reverse_misses_ = 0;
+  unsigned touch_faults_ = 0, reverse_misses_ = 0;
   const char *error_ = "none";
 };
 

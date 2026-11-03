@@ -1,0 +1,14 @@
+# Keep inner helpers together with their entry points. noflash also places
+# object-local read-only data in DRAM; it does not move image/font assets.
+[mapping:nspanel_lvgl_software_renderer]
+archive: liblvgl__lvgl.a
+entries:
+    if NSPANEL_LVGL_IRAM = y:
+        lv_draw_sw_blend (noflash)
+        lv_draw_sw_blend_to_rgb565 (noflash)
+        lv_draw_sw_blend_to_rgb565_swapped (noflash)
+        lv_draw_sw_fill (noflash)
+        lv_draw_sw_img (noflash)
+        lv_draw_sw_letter (noflash)
+        lv_draw_sw_mask (noflash)
+        lv_draw_sw_mask_rect (noflash)

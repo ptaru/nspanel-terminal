@@ -1,76 +1,51 @@
 # Changelog
 
+## 0.8.0 — 2026-11-03
+
+- Add optional ESP-IDF LVGL renderer placement with `lvgl_iram`, disabled by default.
+- Require native 94 and protocol 8, with header CRC, structural validation, DMA error detection and span-based COBS decoding. Install the matching TFT and ESP32 component together.
+- Stream PackBits-encoded LVGL flush strips from reserved slots, encode outside the transport lock, and frame DATA directly from cached payloads. Use producer and slot-release wake signals for UART scheduling.
+- Optimise contiguous PackBits literals and runs.
+- Remove diagnostic benchmarks, traces, measurement actions and the deliberate watchdog test from the public component.
+- EU TFT hardware-tested; US TFT validated offline only.
+
 ## 0.7.1 — 2026-11-01
 
-- Add `button_keyboard`, an LVGL text-entry keyboard built from individual
-  buttons so a press invalidates one key instead of the whole keyboard. It
-  provides the stock four layouts, repeatable keys, ready/cancel triggers and
-  textarea editing without depending on the NSPanel terminal transport.
-- Keep a cached frame slot until the rectangle's DONE reply so an `ERROR`
-  retry cannot race a reused slot; burst and non-final rectangles remain
-  releasable at END.
-- Resynchronize the fixed 32-byte reverse report stream after a lost or
-  inserted byte instead of failing the terminal on the first bad frame.
-- Ignore malformed or Goodix-faulted touch reports and drop out-of-range or
-  queued touches instead of stopping the stream.
-- Reject display `lambda:`, `pages:`, `auto_clear_enabled: true`,
-  `show_test_card: true` and non-zero `rotation`; the component is LVGL-only.
-- Require a 115200 8N1 UART with TX and RX through final validation, and stop
-  overriding the shared UART's TX buffer and RX threshold.
-- Make the standard touchscreen `display:` key authoritative and deprecate
-  `panel_id`.
-- Add `frame_slots_ram: internal|psram` to place the four encoded frame slots
-  explicitly; `psram` requires the `psram:` component and frees about 74 KB of
-  internal RAM at the measured external-memory cost.
-- Run TFT uploads in a separate task, abort the range read on a negative
-  result, bound frame-slot waits, repaint dropped areas, and report the
-  transport task's stack high-water mark.
+- Add `button_keyboard`, an LVGL text-entry keyboard built from individual buttons so a press invalidates one key instead of the whole keyboard. It provides the stock four layouts, repeatable keys, ready/cancel triggers and textarea editing without depending on the NSPanel terminal transport.
+- Keep a cached frame slot until the rectangle's DONE reply so an `ERROR` retry cannot race a reused slot; burst and non-final rectangles remain releasable at END.
+- Resynchronize the fixed 32-byte reverse report stream after a lost or inserted byte instead of failing the terminal on the first bad frame.
+- Ignore malformed or Goodix-faulted touch reports and drop out-of-range or queued touches instead of stopping the stream.
+- Reject display `lambda:`, `pages:`, `auto_clear_enabled: true`, `show_test_card: true` and non-zero `rotation`; the component is LVGL-only.
+- Require a 115200 8N1 UART with TX and RX through final validation, and stop overriding the shared UART's TX buffer and RX threshold.
+- Make the standard touchscreen `display:` key authoritative and deprecate `panel_id`.
+- Add `frame_slots_ram: internal|psram` to place the four encoded frame slots explicitly; `psram` requires the `psram:` component and frees about 74 KB of internal RAM at the measured external-memory cost.
+- Run TFT uploads in a separate task, abort the range read on a negative result, bound frame-slot waits, repaint dropped areas, and report the transport task's stack high-water mark.
 
 ## 0.7.0 — 2026-10-31
 
-- Replace the 290 KB full-frame framebuffer mirror with flush-area streaming:
-  each LVGL flush area is PackBits-encoded into 16-row slots and queued through
-  the transport. The mirror, dirty-row scan and snapshot are gone.
-- Allocate the four frame slots in internal RAM when the stream starts and
-  remove the component's `psram` dependency. With smaller slots and a 10% LVGL
-  buffer the pipeline runs without PSRAM; the default panel build keeps the 20%
-  buffer and 4 x 16-row slots in internal RAM.
-- Add a `report_memory` diagnostic (internal/PSRAM free, largest block, slot
-  placement, maximum loop gap) and a `Render action` measurement from the
-  action to the last DONE.
-- Fix re-entry after a failed stream start so a stopped terminal can retry the
-  slot allocation.
-- Measured on the EU panel: five-redraw total 447-448 ms -> 310-319 ms; page
-  transitions 254-341 ms action-to-DONE; page bytes +3.5-15% because the mirror
-  no longer prunes unchanged pixels; clock 41 ms / about 10.9 KB; zero faults.
-- Protocol 7 and both native-93 TFTs are unchanged from 0.6.0; no TFT upload is
-  required. The US build remains offline-validated only.
+- Replace the 290 KB full-frame framebuffer mirror with flush-area streaming: each LVGL flush area is PackBits-encoded into 16-row slots and queued through the transport. The mirror, dirty-row scan and snapshot are gone.
+- Allocate the four frame slots in internal RAM when the stream starts and remove the component's `psram` dependency. With smaller slots and a 10% LVGL buffer the pipeline runs without PSRAM; the default panel build keeps the 20% buffer and 4 x 16-row slots in internal RAM.
+- Add a `report_memory` diagnostic (internal/PSRAM free, largest block, slot placement, maximum loop gap) and a `Render action` measurement from the action to the last DONE.
+- Fix re-entry after a failed stream start so a stopped terminal can retry the slot allocation.
+- Measured on the EU panel: five-redraw total 447-448 ms -> 310-319 ms; page transitions 254-341 ms action-to-DONE; page bytes +3.5-15% because the mirror no longer prunes unchanged pixels; clock 41 ms / about 10.9 KB; zero faults.
+- Protocol 7 and both native-93 TFTs are unchanged from 0.6.0; no TFT upload is required. The US build remains offline-validated only.
 
 ## 0.6.0 — 2026-10-31
 
-- Speed up PackBits encoding and DATA framing with bounded direct buffer writes
-  and GCC speed optimisation confined to the hot routines.
-- Add byte-for-byte compatibility tests against the previous encoder across
-  packet/run boundaries, every legal DATA payload length and protocols 6/7.
-- Keep the protocol, credit window and both TFTs unchanged. Existing 0.5.0
-  installations need only update the ESP32 component; no TFT upload is required.
-  The US build remains offline-validated only.
+- Speed up PackBits encoding and DATA framing with bounded direct buffer writes and GCC speed optimisation confined to the hot routines.
+- Add byte-for-byte compatibility tests against the previous encoder across packet/run boundaries, every legal DATA payload length and protocols 6/7.
+- Keep the protocol, credit window and both TFTs unchanged. Existing 0.5.0 installations need only update the ESP32 component; no TFT upload is required. The US build remains offline-validated only.
 
 ## 0.5.0 — 2026-10-31
 
 - Add protocol 7 and native 93 TFTs with burst completion and live brightness.
 - Improve dirty-rectangle selection and retain protocol 6 compatibility.
 - Add portable protocol and rectangle coverage checks.
-- Load the component from the tagged GitHub release in both examples, so they
-  no longer assume a local checkout.
+- Load the component from the tagged GitHub release in both examples, so they no longer assume a local checkout.
 
 ## 0.4.0 — 2026-10-30
 
-- Add a `run_render_benchmark` diagnostic action. It forces one or more
-  full-screen LVGL refreshes through the normal dirty-rectangle path and
-  reports total, refresh, transfer, copy, encode, UART-write, credit-wait and
-  DONE-wait timings plus wire utilisation. It also reports the span from the
-  first rectangle submit to the final DONE.
+- Add a `run_render_benchmark` diagnostic action. It forces one or more full-screen LVGL refreshes through the normal dirty-rectangle path and reports total, refresh, transfer, copy, encode, UART-write, credit-wait and DONE-wait timings plus wire utilisation. It also reports the span from the first rectangle submit to the final DONE.
 - Wake the ESP32 transport task when reverse UART data arrives, reducing idle gaps during sustained display updates. The EU historical gradient and random workloads improved from about 2.6 s and 9.3 s to 2.22 s and 7.19 s over eight full-screen frames, with unchanged wire content and no transport faults. The TFT receiver is unchanged.
 - Include the `esp_http_client` IDF component, which current ESPHome releases exclude by default, so TFT upload builds on ESP-IDF. (#1)
 - Leave Nextion protocol reparse mode (`recmod=1`) before a TFT upload, so the upload also starts from TFTs that use it, such as the Lovelace UI. (#1)
@@ -82,7 +57,7 @@ Thanks to @randybb for the TFT upload and redraw fixes in #1.
 ## 0.3.0 — 2026-10-29
 
 - Add US portrait support: `terminal-us.tft` and `base-us.tft` for the 320×480 panel, alongside the EU `terminal-eu.tft` and `base-eu.tft`.
-- Build both images from unmodified stock 72 blank exports. The EU profile applies seven earlier EU native patches; the US profile uses the stock US native code. Both shipped images report native revision 92.
+- Build both images from unmodified blank Editor exports with native version 72. The EU profile applies seven earlier EU native patches; the US profile uses the stock US native code. Both shipped images report native revision 92.
 - Add `width`/`height` display configuration and make the framebuffer, dirty-tile tracker, touch bounds and protocol engine use the configured panel size.
 - Require native revision 92 in the component; panel geometry remains selected by `width`/`height` and checked by the display loader.
 - Add EU and US build/verify profiles and coherent TFT names.
@@ -106,8 +81,7 @@ Thanks to @randybb for the TFT upload and redraw fixes in #1.
 ## 0.1.0 — 2026-10-29
 
 - Public packaging of the prebuilt custom native display firmware and the ESPHome display/touchscreen component.
-- Blank-UI TFT (`terminal-eu.tft`) built from a compatible Nextion
-  Editor 1.65.1 export and patched to native V92.
+- Blank-UI TFT (`terminal-eu.tft`) built from a compatible Nextion Editor 1.65.1 export and patched to native V92.
 - Installer and graphical ESPHome examples.
 - Install, compatibility, recovery, safety, protocol and troubleshooting docs.
 - TFT verifier.

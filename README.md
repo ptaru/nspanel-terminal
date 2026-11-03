@@ -1,157 +1,36 @@
 # NSPanel terminal
 
-Development candidate: native 94 / protocol 8 (unreleased).
+Custom firmware for the Nextion display inside the EU and US Sonoff NSPanel. It lets the ESP32 draw arbitrary RGB565 pixels over UART and receive touch input. The included ESPHome component requires LVGL to render the interface.
 
-The EU candidate passed an initial hardware upload and redraw smoke check on
-2 November 2026. The US candidate remains validated offline only. The candidate removes the body CRC and
-adds span decoding; no performance gain has yet been measured on hardware.
-The development sender requires native 94 / protocol 8; it rejects native
-92/93 and no longer emits protocol 6/7 records.
+The TFT replaces the Sonoff interface with a blank fallback page. If the host stops transmitting, the display returns to that page after about three seconds. The firmware targets `NX4832F035_011C` displays with MCU code F130.
 
+| Panel | Geometry | Display firmware |
+| --- | --- | --- |
+| EU landscape | 454×320 | [`terminal-eu.tft`](firmware/terminal-eu.tft) |
+| US portrait | 320×480 | [`terminal-us.tft`](firmware/terminal-us.tft) |
 
-Turn an EU or US Sonoff NSPanel into a general-purpose ESPHome display and
-touchscreen. The current version requires LVGL for UI rendering; standard ESPHome
-display `lambda:` and `pages:` rendering are not supported. ESPHome draws the
-interface on the ESP32 and sends it to the
-panel's screen over the internal serial link. The supplied display image
-replaces the Sonoff interface with a blank "waiting for connection" page, which
-is shown when the terminal is not running. This project is experimental and
-targets the NSPanel display `NX4832F035_011C` (MCU code F130), not NSPanel Pro.
-
-| Panel | Orientation | Screen size | Firmware version | Image to install | SHA-256 |
-| --- | --- | --- | ---: | --- | --- |
-| EU | landscape | 454×320 in a 480×320 controller | 94 | `firmware/terminal-eu.tft` | `1a8cd088…f92df3` |
-| US | portrait | 320×480 | 94 | `firmware/terminal-us.tft` | `98b2a5f6…a441c3d` |
-
-Both terminal images report native revision 94. Both retained bases are
-unmodified 72 exports (the EU Editor export and the stock US export); the EU
-build applies EU native patches, while the US build leaves the
-stock US native code alone. Panel geometry is
-selected by `width`/`height` and checked by the display loader, not inferred
-from the version.
-
-Both images replace the stock Sonoff interface and let ESPHome control the
-screen and receive touch input. Brightness changes take effect while the UI is
-running. If ESPHome stops sending data, the panel returns to its blank fallback
-page after about three seconds, so a crashed or disconnected host does not leave
-the screen frozen.
-
-The native 94 EU image passed an initial hardware upload/redraw smoke check. The US image is built from the
-stock US image and validated offline (package structure and checksums); it has not been run on US hardware yet. Treat it as experimental and
-keep the original US image for rollback.
-
-The display firmware source is included in [`firmware/src/`](firmware/src/) and
-builds both images from the original Sonoff images. See
-[display firmware internals](docs/FIRMWARE.md) for the implementation and
-[building](docs/BUILDING.md) for the toolchain and commands.
-
-Version 0.7.1 includes the post-0.7.0 transport fixes and `frame_slots_ram`.
-The display path remains the 0.7.0 flush-area streaming design. The TFTs are unchanged from 0.7.0; existing 0.7.0
-installations only need an ESP32 firmware update.
-
-## Rendering compatibility
-
-Version 0.7.0 and later stream LVGL flush areas directly, without a full-screen
-framebuffer. Use `lvgl:` widgets and `lvgl.page.show` for the UI. Standard
-ESPHome display `lambda:` and `pages:` rendering no longer work; v0.7.1 and
-current development code reject them during configuration validation. This
-restriction concerns display rendering, not lambdas used in automations.
-
-For a temporary legacy option, pin the `nspanel_terminal` external component to
-`v0.6.0`, the last release containing the framebuffer and display lambda/page
-writer path:
-
-```yaml
-external_components:
-  - source: github://ptaru/nspanel-terminal@v0.6.0
-    components: [nspanel_terminal]
-```
-
-Use the v0.6.0 configuration and component documentation as the starting point;
-that release requires `psram:` and retains a full framebuffer plus a transfer
-snapshot. For lambda rendering, replace the example's `lvgl:` UI with a display
-`lambda:` and a finite `update_interval` instead of `never`.
-
-The EU and US TFT files in v0.6.0 are byte-identical to those in v0.7.1
-(native 93 / protocol 7), so an existing matching v0.7.1 TFT does not need to be
-replaced for this sender pin. Otherwise, use the TFT for your panel from the
-v0.6.0 tag. The pin predates the later transport lifetime and recovery fixes;
-it is a legacy compatibility option, not a new hardware validation of lambda
-rendering. US hardware remains untested.
+The EU firmware has been tested on one panel. The US firmware is validated offline only. Checksums are listed in [display firmware](firmware/README.md).
 
 ## Install
 
-1. Back up the panel's existing TFT and ESP32 configuration. Keep power stable during display updates; a failed transfer can require recovery.
-2. Copy `examples/secrets.yaml.example` to `examples/secrets.yaml` and fill in your credentials and `tft_url`. Serve the TFT for your panel over HTTP from a server that supports `HEAD` and byte-range requests. For example, Home Assistant's `/local/` file service can host it.
-3. Verify the file:
+1. Keep a backup TFT and review [recovery](docs/RECOVERY.md). An interrupted display update can require physical recovery.
+2. Choose the [EU](examples/panel.yaml) or [US](examples/panel-us.yaml) ESPHome example. Copy `examples/secrets.yaml.example` to `examples/secrets.yaml` and set your credentials.
+3. Serve the matching TFT over HTTP with content length and byte-range support, set `tft_url`, and verify the file with `python3 tools/verify_tft.py --panel eu firmware/terminal-eu.tft` or the corresponding `us` paths.
+4. Flash the ESP32 configuration, then call its `upload_tft` API action. Keep power stable until the transfer finishes, then check rendering and touch.
 
-   ```sh
-   # EU
-   python3 tools/verify_tft.py firmware/terminal-eu.tft
-   # US
-   python3 tools/verify_tft.py --panel us firmware/terminal-us.tft
-   ```
+Use the component and TFT from the same release. The examples pin `v0.8.0`. For local builds, see [component configuration](examples/README.md#working-on-the-component). The component owns the display UART; do not share it with another Nextion component.
 
-4. Flash `examples/panel.yaml` for the EU panel or `examples/panel-us.yaml` for the US panel — USB serial for the first installation, or OTA if the current firmware is reachable. Both load the component from the `v0.7.1` tag on GitHub and expose `upload_tft`, so no local checkout is needed.
-5. Call `upload_tft`. The component stops the terminal, installs the TFT from `tft_url`, and restarts the display. Wait for completion, then verify that the ESPHome UI renders and touch works.
+## Rendering
 
-The sample configurations use the NSPanel GPIO pins and PSRAM wiring. Review them
-before installing, especially if your board differs. Keep the component and the
-TFT from the same release (`v0.7.1`; use the `main` branch for development) and
-select the matching panel geometry:
+Use `lvgl:` widgets and `lvgl.page.show`. Standard ESPHome display `lambda:` and `pages:` rendering are unsupported; lambdas in automations are supported. See [component configuration](components/nspanel_terminal/README.md) for settings, API calls and optional LVGL IRAM placement.
 
-```yaml
-display:
-  - platform: nspanel_terminal
-    # EU landscape (default)
-    width: 454
-    height: 320
+For non-LVGL display drawing, pin the component to `github://ptaru/nspanel-terminal@v0.6.0` and use that tag's [configuration documentation](https://github.com/ptaru/nspanel-terminal/tree/v0.6.0) and matching TFT. That version supports display lambdas and pages and requires PSRAM. Its TFT is incompatible with the current component.
 
-  # US portrait
-  # width: 320
-  # height: 480
-```
+## Documentation
 
-Only `454x320` and `320x480` are accepted. The component rejects the wrong
-native identity rather than streaming into a mismatched framebuffer.
+- [Building](docs/BUILDING.md): compile and verify both TFTs offline.
+- [Firmware internals](docs/FIRMWARE.md) and [protocol](docs/PROTOCOL.md): display implementation and UART format.
+- [Examples](examples/README.md) and [optional keyboard](components/button_keyboard/README.md): ESPHome configuration.
+- [Contributing](CONTRIBUTING.md) and [changelog](CHANGELOG.md).
 
-## Operate
-
-The examples expose ESPHome API actions `exit_terminal`, `enter_terminal`,
-`upload_tft` and `set_brightness`. Set `percent` to an integer from 0 to 100.
-The TFT applies brightness between streamed rectangles and acknowledges it
-without leaving the terminal. `brightness` under the display sets the initial
-level at boot.
-
-For later TFT updates, serve the verified TFT at the configured URL and call
-`upload_tft` from the panel firmware. The component owns the display UART; do
-not configure a separate Nextion component on that UART at the same time. If the
-host stops transmitting, the display watchdog returns to the blank page. The
-blank TFT does not contain the Sonoff UI.
-
-## Build from source
-
-The display build is offline and needs only Python and a clang with the ARM
-backend, not ESPHome:
-
-```sh
-python3 tools/build_tft.py --panel eu --check
-python3 tools/verify_tft.py build/terminal-eu.tft
-
-python3 tools/build_tft.py --panel us --check
-python3 tools/verify_tft.py --panel us build/terminal-us.tft
-```
-
-Or run `make verify`, which checks both profiles. `--check` reproduces the
-shipped TFT byte-for-byte. For a modified build, omit `--check` and verify with
-`tools/verify_tft.py --allow-modified` (add `--panel us` for the US image). The
-builder never uploads. See [building](docs/BUILDING.md) and the
-[source map](firmware/src/).
-
-See [firmware internals](docs/FIRMWARE.md), [protocol](docs/PROTOCOL.md),
-[recovery](docs/RECOVERY.md),
-[terminal component configuration](components/nspanel_terminal/README.md),
-[optional keyboard component and stock-keyboard workaround](components/button_keyboard/README.md),
-[examples](examples/README.md), and [contributing](CONTRIBUTING.md). The TFT
-contains the Nextion runtime; see [NOTICE](NOTICE). Code is MIT licensed; see
-[LICENSE](LICENSE).
+Code is MIT licensed; see [LICENSE](LICENSE). The TFTs contain the Nextion runtime; see [NOTICE](NOTICE).
