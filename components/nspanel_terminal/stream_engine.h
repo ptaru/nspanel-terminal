@@ -13,6 +13,7 @@ class StreamEngine {
   enum class Wait { RUNNABLE, RX, PRODUCER, TX_SPACE, INACTIVE };
   struct Pixels {
     const uint8_t *data;
+    const uint8_t *literal_span(unsigned start) const { return data + 2 * size_t(start); }
     uint16_t operator()(unsigned i) const { return protocol::get16(data + 2 * i); }
     unsigned repeat_scan(unsigned start, unsigned count, uint16_t value) const {
       const uint8_t *p = data + 2 * size_t(start);

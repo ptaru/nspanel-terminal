@@ -12,7 +12,7 @@ int main() {
   for (unsigned i : {5120u, 7264u, 145280u}) lengths.push_back(i);
   for (unsigned offset = 0; offset < 4; ++offset) {
     for (unsigned count : lengths) {
-      for (unsigned pattern = 0; pattern < 8; ++pattern) {
+      for (unsigned pattern = 0; pattern < 10; ++pattern) {
         std::vector<uint8_t> input(offset + 2 * count);
         auto *p = input.data();
         if (offset) p += offset;
@@ -22,7 +22,8 @@ int main() {
               pattern == 2 ? uint16_t(random >> 16) :
               pattern == 3 ? (i / 127) % 2 : pattern == 4 ? (i / 128) % 2 :
               pattern == 5 ? (i / 129) % 2 : pattern == 6 ? (i % 19 ? 0xffff : i) :
-              ((random & 31) ? 0x4321 : uint16_t(random >> 16));
+              pattern == 7 ? ((random & 31) ? 0x4321 : uint16_t(random >> 16)) :
+              pattern == 8 ? (i / 2) % 7 : (i % 257) / 2;
           p[2 * i] = uint8_t(value); p[2 * i + 1] = uint8_t(value >> 8);
         }
         protocol::Encoder<StreamEngine::Pixels> fast(count, {p});

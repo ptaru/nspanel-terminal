@@ -92,6 +92,10 @@ template <class T, class = void> struct HasRepeatScan : std::false_type {};
 template <class T>
 struct HasRepeatScan<T, std::void_t<decltype(std::declval<T &>().repeat_scan(0u, 0u, uint16_t{}))>>
     : std::true_type {};
+template <class T, class = void> struct HasLiteralSpan : std::false_type {};
+template <class T>
+struct HasLiteralSpan<T, std::void_t<decltype(std::declval<T &>().literal_span(0u))>>
+    : std::true_type {};
 template <class Pixel>
 class Encoder {
   Pixel pixel;
@@ -171,12 +175,40 @@ class Encoder {
         size_t mark = size;
         dest[size++] = 0;
         unsigned run = 0;
-        do {
-          auto v = pop();
-          dest[size++] = uint8_t(v >> 8);
-          dest[size++] = uint8_t(v);
-          ++run;
-        } while (run < room && n && !(n == 2 && a == b));
+        if constexpr (HasLiteralSpan<Pixel>::value) {
+          // Fuse two literal pixels without refill's per-pixel bookkeeping.
+          // Stop before either adjacent pair becomes a repeat, preserving the
+          // original two-pixel lookahead and every DATA/token boundary.
+          const uint8_t *src = pixel.literal_span(g);
+          while (run + 2 <= room && n == 2 && limit - g >= 2) {
+            const uint16_t c = uint16_t(src[0]) | (uint16_t(src[1]) << 8);
+            src += 2; ++g;
+            dest[size++] = uint8_t(a >> 8);
+            dest[size++] = uint8_t(a);
+            ++run; ++u;
+            if (b == c) { a = b; b = c; break; }
+            const uint16_t d = uint16_t(src[0]) | (uint16_t(src[1]) << 8);
+            src += 2; ++g;
+            dest[size++] = uint8_t(b >> 8);
+            dest[size++] = uint8_t(b);
+            ++run; ++u;
+            a = c; b = d;
+            if (a == b) break;
+          }
+          while (run < room && n && !(n == 2 && a == b)) {
+            auto v = pop();
+            dest[size++] = uint8_t(v >> 8);
+            dest[size++] = uint8_t(v);
+            ++run;
+          }
+        } else {
+          do {
+            auto v = pop();
+            dest[size++] = uint8_t(v >> 8);
+            dest[size++] = uint8_t(v);
+            ++run;
+          } while (run < room && n && !(n == 2 && a == b));
+        }
         dest[mark] = uint8_t(run - 1);
       }
     }
