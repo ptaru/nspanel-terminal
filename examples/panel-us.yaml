@@ -3,11 +3,18 @@
 esphome:
   name: nspanel-us
   friendly_name: NSPanel US
+  loop_interval: 1ms
 
 esp32:
   board: esp32dev
   framework:
-    type: arduino
+    type: esp-idf
+    advanced:
+      # Requires an ESP32 revision 3.0 or newer; check your board before flashing.
+      minimum_chip_revision: "3.0"
+      flash_chip: generic
+      # Optional extra IRAM; requires a compatible ESP-IDF bootloader.
+      # sram1_as_iram: true
     sdkconfig_options:
       # US NSPanel PSRAM wiring. Verify this against your board revision.
       CONFIG_D0WD_PSRAM_CLK_IO: "5"
@@ -89,7 +96,11 @@ display:
     height: 480
     update_interval: never
     auto_clear_enabled: false
-    # frame_slots_ram: internal  # or psram (requires psram:)
+    # Frame slots prefer internal RAM by default; use psram to save internal RAM.
+    # frame_slots_ram: psram  # Requires psram: and may slow rendering.
+    # Place selected LVGL renderer code in IRAM to improve rendering performance.
+    # Requires ESP-IDF and additional internal memory.
+    lvgl_iram: true
     tft_url: !secret tft_url
     brightness: 100
 
