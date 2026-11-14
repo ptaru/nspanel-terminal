@@ -3,7 +3,7 @@
 
 This document describes the native firmware that runs on the display side of the NSPanel. It is for developers who want to understand, audit, modify or rebuild the shipped TFT. For installation, use the [main README](../README.md); for the build commands, see [building](BUILDING.md); for the wire format, see [protocol](PROTOCOL.md).
 
-> **Experimental.** The EU image is validated on one EU NSPanel. The US image is a source port validated offline; it has not been installed on US hardware. Package checks cover image layout and CRCs, but not electrical timing, worst-case stack use, long-duration operation or recovery from every interrupted upload. Keep a rollback TFT.
+> **Experimental.** The EU image is validated on one EU NSPanel. The US image is a source port validated offline; the maintainer has not installed it on US hardware, but an external tester reported the state-2 build running on a US panel. Package checks cover image layout and CRCs, but not electrical timing, worst-case stack use, long-duration operation or recovery from every interrupted upload. Keep a rollback TFT.
 
 ## At a glance
 
@@ -12,12 +12,12 @@ This document describes the native firmware that runs on the display side of the
 | Panel | Sonoff NSPanel, display `NX4832F035_011C`, MCU code F130 | same |
 | Orientation | landscape | portrait |
 | Visible area | 454×320 inside a 480×320 controller | full 320×480 |
-| Stock entry state | `0x20000101 == 2` | `0x20000101 == 1` |
-| Native terminal | protocol 8, native 94 | protocol 8, native 94 |
+| Stock entry state | `0x20000101 == 2` | `0x20000101 == 2` |
+| Native terminal | protocol 8, native 95 | protocol 8, native 95 |
 | Base native version | 72 | 72 (identical decoded F130 image) |
-| Native code patches | 7 | 6 |
+| Native code patches | 7 | 7 |
 | Shipped TFT | [`firmware/terminal-eu.tft`](../firmware/terminal-eu.tft), 264,936 bytes | [`firmware/terminal-us.tft`](../firmware/terminal-us.tft), 264,984 bytes |
-| Shipped SHA-256 | `1a8cd088aba9bb0f142876d0be61ddebc183809e83affc40e84bd85dcef92df3` | `47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd` |
+| Shipped SHA-256 | `95c4b8319a01b8a76f14f695b02f7921bde21aa1f8b7d2bd3a43ef89336e56e8` | `85fae671a931b08bf465cbddb7373ecbd81919a9bd8cdd4911b1aefeffbf0ba8` |
 | Build input | [`firmware/base-eu.tft`](../firmware/base-eu.tft), SHA-256 `6314294af0822bfe1616d2f28ba4e81b15038a20b53abedd0f9aafacb64994ef` | [`firmware/base-us.tft`](../firmware/base-us.tft), SHA-256 `f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c` |
 | Source | [`firmware/src/`](../firmware/src/) | same |
 | Program size | 3,442 of 3,568 available bytes | 3,442 of 3,568 available bytes |
@@ -25,7 +25,7 @@ This document describes the native firmware that runs on the display side of the
 | Watchdog | 3,000 ms of host silence | same |
 | Live brightness | 0–100%, applied between rectangles, status 135 | same |
 
-Both bases are unmodified blank Editor exports with native version 72, and their decoded F130 native images are byte-identical (SHA-256 `5612e8be…`). The two TFTs differ only in UI resources, geometry and file size. Both shipped images apply the same six shared native patches; the EU image additionally applies the state-selector patch. Each shipped image also changes the 4 KiB terminal preamble, helper 0, the native version metadata and the package checksums. The UI assets are unchanged.
+Both bases are unmodified blank Editor exports with native version 72, and their decoded F130 native images are byte-identical (SHA-256 `5612e8be…`). The two TFTs differ only in UI resources, geometry and file size. Both panels report stock entry state 2, so both shipped images apply the same seven native patches and their native images are byte-identical. Each shipped image also changes the 4 KiB terminal preamble, helper 0, the native version metadata and the package checksums. The UI assets are unchanged.
 
 ## What the firmware modification changes
 
@@ -36,11 +36,11 @@ The builder changes these regions in the selected base TFT:
 1. **Preamble at file offset `0x1000`.** The first 3,442 bytes become the compiled terminal program; the rest of the 4 KiB region is `0xFF`. This region maps to external SPI address `0x11000`.
 2. **Helper 0 at bundle offset `0x357B6 + 0x74`.** The 844-byte helper-0 slot becomes the 292-byte EU loader or 288-byte US loader, padded with `0xFF`.
 3. **Helper-0 CRC** in the helper-0 entry at `0x357B6 + 0x10` and the enclosing helper bundle CRC at `0x357B6`.
-4. **Native code patches.** Both profiles apply the shared updater, dim/continuation and baud patches at `0x2439`, `0xD134`/`0xD158`/`0xD160` and `0xEB0C`/`0xEB10`. The EU profile additionally changes the state selector at `0xC072` from `cmp r0,#1` to `cmp r0,#2`, because the EU panel enters at state 2. The US profile keeps the stock comparison for its state 1. See [the source map](../firmware/src/README.md#native-patches) for what each patch changes.
-5. **Native version metadata** at native offset `0xB8`, plus its two CRCs at `0xB4` and `0xBE`. Both bases report 72; both shipped images report 94.
+4. **Native code patches.** Both profiles apply the same seven patches: the updater resource-skip branch at `0x2439`, the state selector at `0xC072` (`cmp r0,#1` → `cmp r0,#2`), the dim/continuation sequence at `0xD134`/`0xD158`/`0xD160`, and the baud entries at `0xEB0C`/`0xEB10`. Both panels report state 2, so the state selector is patched for both. See [the source map](../firmware/src/README.md#native-patches) for what each patch changes.
+5. **Native version metadata** at native offset `0xB8`, plus its two CRCs at `0xB4` and `0xBE`. Both bases report 72; both shipped images report 95.
 6. **Package CRCs** that cover the file: resource allocation, header 1 and the whole-file final word.
 
-Apart from those regions, the page/font/picture tables, encoded headers and helpers 1–8 are preserved. The only stock-updater change is the resource-skip branch disabled at `0x2439`. The builder enforces this with a patch-region whitelist; the shipped builds change 4,320 bytes (EU) and 4,316 bytes (US). The terminal can therefore return to the stock blank page, and TFT updates use the stock Nextion updater.
+Apart from those regions, the page/font/picture tables, encoded headers and helpers 1–8 are preserved. The only stock-updater change is the resource-skip branch disabled at `0x2439`. The builder enforces this with a patch-region whitelist; the shipped builds change 4,320 bytes (EU) and 4,318 bytes (US). The terminal can therefore return to the stock blank page, and TFT updates use the stock Nextion updater.
 
 The source does **not** create a standalone display firmware. It is an overlay that calls fixed stock routines and is loaded by the stock helper dispatcher.
 
@@ -77,7 +77,7 @@ The offsets below are common to both profiles. The EU file is 264,936 bytes; the
 | `0x357B6 + 0x74` | 844 | Helper 0 slot: EU 292-byte or US 288-byte loader plus `0xFF` padding. |
 | last 4 bytes | 4 | Whole-file CRC word. |
 
-Both bases report native version 72 and both shipped images report 94 at record offset `0xB8`. The verifier checks the profile-specific native image and package hashes.
+Both bases report native version 72 and both shipped images report 95 at record offset `0xB8`. The verifier checks the profile-specific native image and package hashes.
 
 ### Checksums
 
@@ -98,7 +98,7 @@ The builder repairs affected checksums and verifies that native image changes ar
 
 The stock runtime reaches helper 0 through its normal width/height callback (state 4). The loader runs with interrupts and the project interpreter suspended.
 
-1. **Preconditions.** The compiled profile's stock geometry (EU 480×320 or US 320×480) and project state byte (`0x20000101 == 2` on EU, `== 1` on US), DMA channel 1 disabled and USART1 DMAR off. If any check fails, `helper_entry` returns 0 without changing anything.
+1. **Preconditions.** The compiled profile's stock geometry (EU 480×320 or US 320×480) and project state byte (`0x20000101 == 2` on both panels), DMA channel 1 disabled and USART1 DMAR off. If any check fails, `helper_entry` returns 0 without changing anything.
 2. **Save.** USART1 CR1/CR3 and the USART1 NVIC enable bit are saved.
 3. **Copy.** The loader reads `POOL_BYTES` from external SPI `0x11000` to `0x20000900` using the stock SPI read routine, then verifies the CRC.
 4. **Enter.** If valid, it calls `pool_entry` at `0x20000901` (Thumb). The program configures the UART and DMA, sends READY with live-brightness capability (134), then runs until EXIT, a fault or the watchdog.
@@ -194,7 +194,7 @@ See [building](BUILDING.md) for the commands, toolchain and troubleshooting. Dif
 - **Protocol changes.** A new record kind or changed status needs a matching ESPHome component. Bump the component version and the native/protocol version together; do not ship a TFT that the host cannot drive safely.
 - **Watchdog.** Edit the `3000` constant, rebuild, verify the package and upload. A shorter value increases the chance of tearing down a slow host; a longer value delays the blank fallback.
 - **Base image.** The patch is tied to the selected profile base and helper bundle. Do not substitute a TFT from a newer Nextion Editor or another MCU code; add a profile with its own geometry and native version instead.
-- **Versioning.** `94` identifies our terminal revision on both panel profiles. A changed package must get a new version because the stock updater skips a valid image with the same version. Stock images report `72`.
+- **Versioning.** `95` identifies our terminal revision on both panel profiles. A changed package must get a new version because the stock updater skips a valid image with the same version. Stock images report `72`. Bumping the revision changed both native images (EU only in metadata, US in the state-selector patch), so the `94` TFTs and this component are not interchangeable: update the component and the TFT together.
 - **Tests.** At minimum run `tools/build_tft.py --panel eu --check`, `tools/build_tft.py --panel us --check`, the matching `verify_tft.py` commands, and any host protocol tests available in your checkout. Hardware uploads are separate and risky.
 
 ## Limits

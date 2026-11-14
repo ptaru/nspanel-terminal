@@ -6,8 +6,8 @@ The component supports the two panel geometries:
 
 | Panel | `width` | `height` | Visible area | Native |
 | --- | ---: | ---: | --- | ---: |
-| EU | 454 (default) | 320 (default) | 454×320 in a 480×320 controller | 94 |
-| US | 320 | 480 | full 320×480 | 94 |
+| EU | 454 (default) | 320 (default) | 454×320 in a 480×320 controller | 95 |
+| US | 320 | 480 | full 320×480 | 95 |
 
 ```yaml
 display:
@@ -23,7 +23,7 @@ display:
 
 The display UART must be 115200 8N1 with both TX and RX; entry switches it to 4 Mbaud and recovery restores 115200. The component uses the configured UART buffer settings; the examples set `tx_buffer_size: 2048` and `rx_full_threshold: 32` for the intended latency. The touchscreen uses the standard `display:` key to select the panel. The deprecated `panel_id` key is accepted for compatibility, must match `display:`,.
 
-`width` and `height` also set the display metadata used by LVGL. Other sizes are rejected. Select the orientation with these values; a non-zero display `rotation` is rejected, and the panel's native project already supplies the correct orientation. The included images report native revision 94; the component requires native 94 / protocol 8. The display loader checks the stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the reverse) fails safely instead of streaming into the wrong framebuffer.
+`width` and `height` also set the display metadata used by LVGL. Other sizes are rejected. Select the orientation with these values; a non-zero display `rotation` is rejected, and the panel's native project already supplies the correct orientation. The included images report native revision 95; the component requires native 95 / protocol 8. The display loader checks the stock entry geometry and state, so an EU TFT in a 320×480 configuration (or the reverse) fails safely instead of streaming into the wrong framebuffer.
 
 The component does not keep a full-frame mirror. Each LVGL flush area is PackBits-encoded outside the transport lock into one of four reserved slots and queued for the transport, which sends the length-prefixed payload with the rectangle protocol. Flush areas are split into 16-row rectangles; DATA records and runs can cross row boundaries. Contiguous sources extend repeats with aligned 32-bit comparisons, while strided sources keep the scalar path. The slots allocate when the stream starts and prefer internal RAM, so LVGL's draw buffer is placed first. When every slot is in flight the flush waits briefly for the transport to release one, then continues with the remaining rows. A timed-out area is dropped and a full repaint is scheduled instead of leaving stale pixels.
 

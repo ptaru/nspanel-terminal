@@ -350,7 +350,7 @@ bool NSPanelDisplay::change_baud_(uint32_t baud) {
 bool NSPanelDisplay::identity_ok_(const char *reply) const {
   // The stock connect reply starts with the model, native version and MCU code:
   // NX4832F035_011C,<native>,61744,... . Our EU and US images both report
-  // native revision 94 (protocol 8). Panel geometry is checked
+  // native revision 95 (protocol 8). Panel geometry is checked
   // separately by the loader through the stock entry dimensions and state.
   static constexpr char MODEL[] = "NX4832F035_011C,";
   const char *field = std::strstr(reply, MODEL);
@@ -362,7 +362,7 @@ bool NSPanelDisplay::identity_ok_(const char *reply) const {
   char *record_end = nullptr;
   const unsigned long record = std::strtoul(end + 1, &record_end, 10);
   if (record_end == end + 1 || *record_end != ',') return false;
-  return version == 94 && record == 61744;
+  return version == 95 && record == 61744;
 }
 void NSPanelDisplay::service_stream_(int incoming) {
   uint32_t started = micros();

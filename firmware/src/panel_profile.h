@@ -13,7 +13,7 @@
  * geometry checks. NSPANEL_ENTRY_* is the width/height that the stock runtime
  * passes to helper 0; it is the controller size, which can be wider than the
  * visible area on the EU panel. NSPANEL_ENTRY_STATE is the stock state byte at
- * 0x20000101: 2 on the EU project state machine and 1 on the US one.
+ * 0x20000101: stock entry state 2 on both the EU and US project states.
  */
 #pragma once
 

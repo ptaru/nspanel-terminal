@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- Apply the updater, dim/continuation and baud native patches to the US TFT, so it now carries the same six shared native patches as the EU image at the same offsets. The US profile deliberately keeps the stock state-selector byte at `0xC072` because the US panel enters at state 1. New US SHA-256 `47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd`. The US image remains offline-only and has not been installed on US hardware.
+- Bump the terminal to native 95 and apply the state-selector patch to the US image. A US-panel hardware report showed the stock entry state is 2, not 1: without `0xC072` the stock state-4 selector rejects the entry path. Both profiles now apply the same seven native patches, enter at state 2, and ship byte-identical native images. The component requires native 95, so update it and the TFT together.
+- US SHA-256 `85fae671a931b08bf465cbddb7373ecbd81919a9bd8cdd4911b1aefeffbf0ba8`; EU SHA-256 `95c4b8319a01b8a76f14f695b02f7921bde21aa1f8b7d2bd3a43ef89336e56e8`. The EU native code is unchanged from 94 (metadata only); the US image adds `0xC072`.
+- Document that a same-version install retains the installed native code, so every native change needs a version bump. The US result comes from an external tester; the maintainer has not installed the 95 image on US hardware.
 
 ## 0.8.0 — 2026-11-03
 

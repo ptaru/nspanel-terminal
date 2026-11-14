@@ -4,14 +4,11 @@ Both profiles start from unmodified blank exports that report native 72: the EU
 blank Editor export and the stock US export. Their container layouts, native
 bundle offsets and helper-0 slots are the same, and their decoded F130 native
 images are byte-identical, so the two TFTs differ only in file size, visible
-geometry and UI resources.
+geometry and UI resources. Both panels report stock entry state 2, so both
+profiles apply the same seven native patches and their shipped native images
+are byte-identical.
 
-The EU profile applies all seven native patches. The US profile applies the six
-that are not tied to the EU entry state: it ports the updater, dim/continuation
-and baud patches, but keeps the stock ``cmp r0,#1`` state-selector byte because
-the US panel enters at state 1, not the EU state 2.
-
-``native_version`` is the package version our terminal reports (94 for both
+``native_version`` is the package version our terminal reports (95 for both
 panels); ``base_native_version`` is what the base image reports before the
 builder sets it. ``native_patches`` are decoded native byte patches applied
 before the version metadata is rewritten. The stock updater treats the version
@@ -60,6 +57,19 @@ class Profile:
         return f"{self.panel_width}x{self.panel_height}"
 
 
+# Both panels report stock entry state 2, so the same seven decoded patches are
+# applied to either base. Keep this in one place so the images cannot diverge.
+NATIVE_PATCHES = (
+    (0x2439, bytes.fromhex("e0")),
+    (0xC072, bytes.fromhex("02")),
+    (0xD134, bytes.fromhex("07e0")),
+    (0xD158, bytes.fromhex("a920fdf7e9fef5")),
+    (0xD160, bytes.fromhex("2afc00e0")),
+    (0xEB0C, bytes.fromhex("80841e")),
+    (0xEB10, bytes.fromhex("00093d")),
+)
+
+
 PROFILES: dict[str, Profile] = {
     "eu": Profile(
         name="eu",
@@ -67,24 +77,16 @@ PROFILES: dict[str, Profile] = {
         base_size=264936,
         base_sha256="6314294af0822bfe1616d2f28ba4e81b15038a20b53abedd0f9aafacb64994ef",
         shipped=ROOT / "firmware" / "terminal-eu.tft",
-        shipped_sha256="1a8cd088aba9bb0f142876d0be61ddebc183809e83affc40e84bd85dcef92df3",
+        shipped_sha256="95c4b8319a01b8a76f14f695b02f7921bde21aa1f8b7d2bd3a43ef89336e56e8",
         base_native_version=72,
-        native_version=94,
+        native_version=95,
         panel_width=454,
         panel_height=320,
         entry_width=480,
         entry_height=320,
         entry_state=2,
-        native_patches=(
-            (0x2439, bytes.fromhex("e0")),
-            (0xC072, bytes.fromhex("02")),
-            (0xD134, bytes.fromhex("07e0")),
-            (0xD158, bytes.fromhex("a920fdf7e9fef5")),
-            (0xD160, bytes.fromhex("2afc00e0")),
-            (0xEB0C, bytes.fromhex("80841e")),
-            (0xEB10, bytes.fromhex("00093d")),
-        ),
-        native_image_sha256="ba28093151d47aab5568fc1cec8e58b000b2c2b091bb9fe2fbcd17150fa97b06",
+        native_patches=NATIVE_PATCHES,
+        native_image_sha256="649d0beb9bae192697293f20e4afdd244d1ef491155837aa60af2d05d1de5fb9",
         ui_dimensions=b"454,320",
         output=ROOT / "build" / "terminal-eu.tft",
     ),
@@ -94,26 +96,16 @@ PROFILES: dict[str, Profile] = {
         base_size=264984,
         base_sha256="f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c",
         shipped=ROOT / "firmware" / "terminal-us.tft",
-        shipped_sha256="47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd",
+        shipped_sha256="85fae671a931b08bf465cbddb7373ecbd81919a9bd8cdd4911b1aefeffbf0ba8",
         base_native_version=72,
-        native_version=94,
+        native_version=95,
         panel_width=320,
         panel_height=480,
         entry_width=320,
         entry_height=480,
-        entry_state=1,
-        # Same patches as the EU profile except 0xC072: that byte rewrites
-        # ``cmp r0,#1`` to ``cmp r0,#2`` on the stock state selector, and the
-        # US panel enters at state 1, so the stock comparison is already right.
-        native_patches=(
-            (0x2439, bytes.fromhex("e0")),
-            (0xD134, bytes.fromhex("07e0")),
-            (0xD158, bytes.fromhex("a920fdf7e9fef5")),
-            (0xD160, bytes.fromhex("2afc00e0")),
-            (0xEB0C, bytes.fromhex("80841e")),
-            (0xEB10, bytes.fromhex("00093d")),
-        ),
-        native_image_sha256="1c43a9e3a0e282e021cbba5a9a115519da87b07cf071d9dc4fd04f7b84403de6",
+        entry_state=2,
+        native_patches=NATIVE_PATCHES,
+        native_image_sha256="649d0beb9bae192697293f20e4afdd244d1ef491155837aa60af2d05d1de5fb9",
         ui_dimensions=b"320,480",
         output=ROOT / "build" / "terminal-us.tft",
     ),

@@ -160,16 +160,16 @@ A `PROGRESS` report's sequence can describe a partially received record; it is n
 
 ## Compatibility
 
-- Protocol version 8 is tied to our native revision 94 on both panel profiles. Stock images report 72 and are rejected by the component. Panel geometry is selected by `width`/`height` and checked separately by the display loader, not inferred from the native version. Do not mix a component and TFT from different protocol revisions or panel profiles.
+- Protocol version 8 is tied to our native revision 95 on both panel profiles. Stock images report 72 and are rejected by the component. Panel geometry is selected by `width`/`height` and checked separately by the display loader, not inferred from the native version. Do not mix a component and TFT from different protocol revisions or panel profiles.
 - A new record kind, status, field meaning or pixel format is an incompatible protocol change. Bump the version and ship a matching host and TFT.
 - The display UART must be owned exclusively by `nspanel_terminal` during a session. Do not configure ESPHome's separate `nextion` component on the same UART.
 
 ## Bursts and host compatibility
 
-The host requires protocol 8 in READY and native 94 in the connect identity. It sends consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group. Only the final END emits DONE. PROGRESS byte credits and touch reports continue throughout; the window is 512 bytes and the DMA ring is 1 KiB.
+The host requires protocol 8 in READY and native 95 in the connect identity. It sends consecutive RECT/DATA/END groups with END.x=0, then END.x=1 on the last group. Only the final END emits DONE. PROGRESS byte credits and touch reports continue throughout; the window is 512 bytes and the DMA ring is 1 KiB.
 
 The production sender closes a burst when its queued flush areas and reserved producer slots drain, or after 255 rectangles, so ongoing drawing cannot postpone acknowledgements indefinitely. Each LVGL flush is encoded into 16-row strips; DATA records may cross row boundaries. The host reuses a strip only after END has been queued in full and no retry can read it. A single final rectangle can retry, so its snapshot remains reserved until DONE. Non-final and multi-rectangle bursts cannot retry.
 
 DONE must match the expected cumulative rectangle count, modulo 65536. A protocol error in a multi-rectangle burst stops the session and marks the whole display dirty for recovery; snapshots may already have been reused. A single-rectangle burst retains a bounded SYNC/retry path. These completion semantics do not provide atomic or tear-free display updates.
 
-The host and TFT must be a matching protocol-8/native-94 pair.
+The host and TFT must be a matching protocol-8/native-95 pair.

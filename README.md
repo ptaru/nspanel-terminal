@@ -18,7 +18,7 @@ The EU firmware has been tested on one panel. The US firmware is validated offli
 3. Serve the matching TFT over HTTP with content length and byte-range support, set `tft_url`, and verify the file with `python3 tools/verify_tft.py --panel eu firmware/terminal-eu.tft` or the corresponding `us` paths.
 4. Flash the ESP32 configuration, then call its `upload_tft` API action. Keep power stable until the transfer finishes, then check rendering and touch.
 
-Use the component and TFT from the same release. The examples pin `v0.8.0`. For local builds, see [component configuration](examples/README.md#working-on-the-component). The component owns the display UART; do not share it with another Nextion component.
+Use the component and TFT from the same release. The examples pin `v0.8.0` (native 94); the `main` branch requires native 95 and the TFTs in this checkout, so build or pin the component from the same revision when using them. For local builds, see [component configuration](examples/README.md#working-on-the-component). The component owns the display UART; do not share it with another Nextion component.
 
 ## Rendering
 
