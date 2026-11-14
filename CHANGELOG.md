@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Apply the updater, dim/continuation and baud native patches to the US TFT, so it now carries the same six shared native patches as the EU image at the same offsets. The US profile deliberately keeps the stock state-selector byte at `0xC072` because the US panel enters at state 1. New US SHA-256 `47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd`. The US image remains offline-only and has not been installed on US hardware.
+
 ## 0.8.0 — 2026-11-03
 
 - Add optional ESP-IDF LVGL renderer placement with `lvgl_iram`, disabled by default.

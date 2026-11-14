@@ -1,10 +1,15 @@
 """Shared EU/US NSPanel TFT profiles.
 
 Both profiles start from unmodified blank exports that report native 72: the EU
-blank Editor export and the stock US export. The EU profile applies the earlier
-EU native patches (state, dim and baud handling) before setting the version; the
-US profile leaves the stock US native code alone. The two bases share the same container layout, native bundle offset
-and helper-0 slot, but differ in file size, visible geometry and UI resources.
+blank Editor export and the stock US export. Their container layouts, native
+bundle offsets and helper-0 slots are the same, and their decoded F130 native
+images are byte-identical, so the two TFTs differ only in file size, visible
+geometry and UI resources.
+
+The EU profile applies all seven native patches. The US profile applies the six
+that are not tied to the EU entry state: it ports the updater, dim/continuation
+and baud patches, but keeps the stock ``cmp r0,#1`` state-selector byte because
+the US panel enters at state 1, not the EU state 2.
 
 ``native_version`` is the package version our terminal reports (94 for both
 panels); ``base_native_version`` is what the base image reports before the
@@ -89,7 +94,7 @@ PROFILES: dict[str, Profile] = {
         base_size=264984,
         base_sha256="f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c",
         shipped=ROOT / "firmware" / "terminal-us.tft",
-        shipped_sha256="98b2a5f6478fa438b3d6e21acb9883e1d30efd7d1a85ae8f0cc0390c2a441c3d",
+        shipped_sha256="47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd",
         base_native_version=72,
         native_version=94,
         panel_width=320,
@@ -97,8 +102,18 @@ PROFILES: dict[str, Profile] = {
         entry_width=320,
         entry_height=480,
         entry_state=1,
-        native_patches=(),
-        native_image_sha256="b934d529a0ad3da8097e2da0fc28ff58419af51842d28cb1832199bec893db33",
+        # Same patches as the EU profile except 0xC072: that byte rewrites
+        # ``cmp r0,#1`` to ``cmp r0,#2`` on the stock state selector, and the
+        # US panel enters at state 1, so the stock comparison is already right.
+        native_patches=(
+            (0x2439, bytes.fromhex("e0")),
+            (0xD134, bytes.fromhex("07e0")),
+            (0xD158, bytes.fromhex("a920fdf7e9fef5")),
+            (0xD160, bytes.fromhex("2afc00e0")),
+            (0xEB0C, bytes.fromhex("80841e")),
+            (0xEB10, bytes.fromhex("00093d")),
+        ),
+        native_image_sha256="1c43a9e3a0e282e021cbba5a9a115519da87b07cf071d9dc4fd04f7b84403de6",
         ui_dimensions=b"320,480",
         output=ROOT / "build" / "terminal-us.tft",
     ),

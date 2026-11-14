@@ -14,9 +14,10 @@ This document describes the native firmware that runs on the display side of the
 | Visible area | 454×320 inside a 480×320 controller | full 320×480 |
 | Stock entry state | `0x20000101 == 2` | `0x20000101 == 1` |
 | Native terminal | protocol 8, native 94 | protocol 8, native 94 |
-| Base native version | 72 | 72 (unmodified blank exports) |
+| Base native version | 72 | 72 (identical decoded F130 image) |
+| Native code patches | 7 | 6 |
 | Shipped TFT | [`firmware/terminal-eu.tft`](../firmware/terminal-eu.tft), 264,936 bytes | [`firmware/terminal-us.tft`](../firmware/terminal-us.tft), 264,984 bytes |
-| Shipped SHA-256 | `1a8cd088aba9bb0f142876d0be61ddebc183809e83affc40e84bd85dcef92df3` | `98b2a5f6478fa438b3d6e21acb9883e1d30efd7d1a85ae8f0cc0390c2a441c3d` |
+| Shipped SHA-256 | `1a8cd088aba9bb0f142876d0be61ddebc183809e83affc40e84bd85dcef92df3` | `47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd` |
 | Build input | [`firmware/base-eu.tft`](../firmware/base-eu.tft), SHA-256 `6314294af0822bfe1616d2f28ba4e81b15038a20b53abedd0f9aafacb64994ef` | [`firmware/base-us.tft`](../firmware/base-us.tft), SHA-256 `f3b55142ae43acb65b22f46d99913ba0bd4eff3622f93dc62a1ae350bfe7b02c` |
 | Source | [`firmware/src/`](../firmware/src/) | same |
 | Program size | 3,442 of 3,568 available bytes | 3,442 of 3,568 available bytes |
@@ -24,7 +25,7 @@ This document describes the native firmware that runs on the display side of the
 | Watchdog | 3,000 ms of host silence | same |
 | Live brightness | 0–100%, applied between rectangles, status 135 | same |
 
-Both bases are unmodified blank Editor exports with native version 72. Each shipped image differs in the 4 KiB terminal preamble, helper 0, the native version metadata, and the package checksums. The EU image additionally applies EU native patches (state, dim and baud handling). The UI assets are unchanged.
+Both bases are unmodified blank Editor exports with native version 72, and their decoded F130 native images are byte-identical (SHA-256 `5612e8be…`). The two TFTs differ only in UI resources, geometry and file size. Both shipped images apply the same six shared native patches; the EU image additionally applies the state-selector patch. Each shipped image also changes the 4 KiB terminal preamble, helper 0, the native version metadata and the package checksums. The UI assets are unchanged.
 
 ## What the firmware modification changes
 
@@ -35,11 +36,11 @@ The builder changes these regions in the selected base TFT:
 1. **Preamble at file offset `0x1000`.** The first 3,442 bytes become the compiled terminal program; the rest of the 4 KiB region is `0xFF`. This region maps to external SPI address `0x11000`.
 2. **Helper 0 at bundle offset `0x357B6 + 0x74`.** The 844-byte helper-0 slot becomes the 292-byte EU loader or 288-byte US loader, padded with `0xFF`.
 3. **Helper-0 CRC** in the helper-0 entry at `0x357B6 + 0x10` and the enclosing helper bundle CRC at `0x357B6`.
-4. **EU native patches** at `0x2439`, `0xC072`, `0xD134`/`0xD158` and `0xEB0C`/`0xEB10`. These provide EU state, dim and baud handling in the native image. The US profile has no native code patches.
+4. **Native code patches.** Both profiles apply the shared updater, dim/continuation and baud patches at `0x2439`, `0xD134`/`0xD158`/`0xD160` and `0xEB0C`/`0xEB10`. The EU profile additionally changes the state selector at `0xC072` from `cmp r0,#1` to `cmp r0,#2`, because the EU panel enters at state 2. The US profile keeps the stock comparison for its state 1. See [the source map](../firmware/src/README.md#native-patches) for what each patch changes.
 5. **Native version metadata** at native offset `0xB8`, plus its two CRCs at `0xB4` and `0xBE`. Both bases report 72; both shipped images report 94.
 6. **Package CRCs** that cover the file: resource allocation, header 1 and the whole-file final word.
 
-Apart from those regions, the page/font/picture tables, encoded headers, helpers 1–8 and the stock updater are preserved. The builder enforces this with a patch-region whitelist; the shipped builds change 4,154 bytes (EU) and 4,127 bytes (US). The terminal can therefore return to the stock blank page, and TFT updates use the stock Nextion updater.
+Apart from those regions, the page/font/picture tables, encoded headers and helpers 1–8 are preserved. The only stock-updater change is the resource-skip branch disabled at `0x2439`. The builder enforces this with a patch-region whitelist; the shipped builds change 4,320 bytes (EU) and 4,316 bytes (US). The terminal can therefore return to the stock blank page, and TFT updates use the stock Nextion updater.
 
 The source does **not** create a standalone display firmware. It is an overlay that calls fixed stock routines and is loaded by the stock helper dispatcher.
 
@@ -71,7 +72,7 @@ The offsets below are common to both profiles. The EU file is 264,936 bytes; the
 | `0x1000` | 0x1000 | Terminal preamble. First 3,442 bytes are code; remainder `0xFF`. Maps to SPI `0x11000`. |
 | `0x10000` | 0x30000 | Resource allocation (fonts, pictures, project data). Unchanged. |
 | `0x14532` | — | Native bundle start. First record follows a 4-byte count. |
-| `0x14566` | 60,352 | Encoded F130 native image (XOR 9 on disk). The EU profile applies native patches; both profiles update the version metadata. |
+| `0x14566` | 60,352 | Encoded F130 native image (XOR 9 on disk). Both profiles apply the shared native patches; the EU profile also changes the state selector. Both profiles update the version metadata. |
 | `0x357B6` | 0x15E0 | Helper bundle: enclosing CRC, count, nine entries. Helper 0 starts at `+0x74`. |
 | `0x357B6 + 0x74` | 844 | Helper 0 slot: EU 292-byte or US 288-byte loader plus `0xFF` padding. |
 | last 4 bytes | 4 | Whole-file CRC word. |

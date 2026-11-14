@@ -23,7 +23,7 @@ This directory contains the C source for the NSPanel protocol-8 terminal that ru
 | Stock helper geometry | 480×320 | 320×480 |
 | Stock entry state | 2 | 1 |
 | Base native version | 72 | 72 |
-| Native code patches | 7 | 0 |
+| Native code patches | 7 | 6 |
 | Shipped native version | 94 | 94 |
 | Build profile | `--panel eu` | `--panel us` |
 | Protocol | 8 | 8 |
@@ -35,7 +35,18 @@ This directory contains the C source for the NSPanel protocol-8 terminal that ru
 | Credit window | 512 encoded bytes | same |
 | Default watchdog | 3,000 ms of host silence | same |
 
-The source is specific to these base TFTs and this display family. The stock runtime addresses it calls are not portable to another Nextion editor version, another MCU code or NSPanel Pro. Both bases are unmodified blank Editor exports with native version 72. The EU profile applies seven EU native patches (state, dim and baud handling); the US profile leaves the stock US native code alone. Both profiles set the native version to 94 and repair its metadata CRCs. Both bases use the same container offsets and load addresses.
+The source is specific to these base TFTs and this display family. The stock runtime addresses it calls are not portable to another Nextion editor version, another MCU code or NSPanel Pro. Both bases are unmodified blank Editor exports with native version 72, and their decoded F130 native images are byte-identical (SHA-256 `5612e8be…`), so every patch offset and stock byte below is the same for both. Both profiles set the native version to 94 and repair its metadata CRCs, and both use the same container offsets and load addresses.
+
+## Native patches
+
+| Offset | EU | US | Effect |
+| --- | :---: | :---: | --- |
+| `0x2439` | ✓ | ✓ | Disables the stock TFT updater's resource-skip shortcut, so an upload writes the resource allocation instead of skipping it when the stored and incoming resource metadata match (the `[0x200000F4] == 1` path). |
+| `0xC072` | ✓ | — | Rewrites the stock state selector `cmp r0,#1` to `cmp r0,#2`. The EU panel enters at state 2; the US profile keeps the stock comparison because it enters at state 1. |
+| `0xD134`, `0xD158`, `0xD160` | ✓ | ✓ | In the stock state-4/`touch_j` continuation: skips the brightness force/restore and the touch/orientation re-init at `0x0800B820`, then emits `A9 FF FF FF` on the UART before the stock continuation resumes. |
+| `0xEB0C`, `0xEB10` | ✓ | ✓ | Stock baud whitelist entries 0 and 1: 2,400/4,800 → 2,000,000/4,000,000. |
+
+The six shared patches are applied byte-for-byte to both images. `0xC072` is deliberately EU-only: applying it to the US image would make the stock state selector reject the panel's state 1 and the overlay would never load.
 
 ## Build
 
@@ -68,4 +79,4 @@ The display UART, DMA channel and GPIOs remain owned by the stock runtime; the o
 
 ## Status
 
-The EU code is validated on one EU NSPanel. The US build is a source port using the same receiver; its package, checksums and ARM receiver are validated offline, but it has not been installed on US hardware. With the documented clang toolchain, both builds are reproducible and match their shipped image SHA-256. The package verifier covers image layout and CRCs, but it does not establish electrical timing, worst-case stack use, long-duration operation or recovery from every interrupted upload. Treat this as experimental firmware.
+The EU code is validated on one EU NSPanel. The US build is a source port using the same receiver; it applies the six shared native patches but keeps the stock state-selector byte, and its package, checksums and ARM receiver are validated offline. It has not been installed on US hardware, so the native patches have no US hardware evidence. With the documented clang toolchain, both builds are reproducible and match their shipped image SHA-256. The package verifier covers image layout and CRCs, but it does not establish electrical timing, worst-case stack use, long-duration operation or recovery from every interrupted upload. Treat this as experimental firmware.

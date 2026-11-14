@@ -9,9 +9,9 @@ The display TFTs are built from the stock EU and US bases and the native C sourc
 | Profile | Panel | Visible area | Base native | Native patches | Shipped native | Base | Shipped |
 | --- | --- | --- | ---: | ---: | ---: | --- | --- |
 | `eu` | EU landscape | 454×320 in a 480×320 controller | 72 | 7 | 94 | `firmware/base-eu.tft` | `firmware/terminal-eu.tft` |
-| `us` | US portrait | 320×480 | 72 | 0 | 94 | `firmware/base-us.tft` | `firmware/terminal-us.tft` |
+| `us` | US portrait | 320×480 | 72 | 6 | 94 | `firmware/base-us.tft` | `firmware/terminal-us.tft` |
 
-Both bases are unmodified blank Editor exports with native version 72. The EU profile applies the EU native patches (state, dim and baud handling); the US profile has no native code patches. Both profiles set the native version metadata to 94 and repair its two CRCs. The two bases share the same container offsets, native bundle location and helper-0 slot, but each profile is tied to its own base SHA-256.
+Both bases are unmodified blank Editor exports with native version 72, and their decoded F130 native images are byte-identical, so the six shared patches apply at the same offsets with the same stock bytes. The EU profile additionally applies the state-selector patch at `0xC072`; the US profile keeps the stock comparison because the US panel enters at state 1. Both profiles set the native version metadata to 94 and repair its two CRCs. The two bases share the same container offsets, native bundle location and helper-0 slot, but each profile is tied to its own base SHA-256.
 
 ## Requirements
 
@@ -72,10 +72,10 @@ Expected US output:
 ```text
 wrote .../build/terminal-us.tft
   panel   : us (320x480)
-  SHA-256 : 98b2a5f6478fa438b3d6e21acb9883e1d30efd7d1a85ae8f0cc0390c2a441c3d
+  SHA-256 : 47df397da5e7f8f8cad9858d2ca6b971ab0cceb3e5e40a582aef0db3987966dd
   program : 3442 / 3568 bytes
   loader  : 288 / 844 bytes
-  changed : 4293 bytes
+  changed : 4316 bytes
   check   : byte-for-byte match with firmware/terminal-us.tft
 ```
 
@@ -205,7 +205,7 @@ The builder only writes a local file. To install a custom TFT:
 | `firmware/base-eu.tft` | EU base build input, SHA-256 `631429...`. |
 | `firmware/terminal-eu.tft` | EU shipped image, SHA-256 `1a8cd088...`. |
 | `firmware/base-us.tft` | US base build input, SHA-256 `f3b551...`. |
-| `firmware/terminal-us.tft` | US shipped image, SHA-256 `98b2a5f6...`. |
+| `firmware/terminal-us.tft` | US shipped image, SHA-256 `47df397d...`. |
 | `tools/build_tft.py` | Profile-aware compiler and TFT patcher. |
 | `tools/panel_profiles.py` | Shared EU/US base, geometry and hash metadata. |
 | `tools/elf_thumb.py` | Fixed-address ELF32 section/relocation reader. |
